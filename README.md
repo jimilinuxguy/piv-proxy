@@ -44,8 +44,8 @@ Refresh using the application's pinned Python dependencies:
 
 ```bash
 docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" \
-  -v "$PWD/pki:/app/pki:rw" --user 0 app \
-  python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem --output /app/pki/nasa-leaf.crl
+  -v "$PWD/pki:/crl-output:rw" --user 0 app \
+  python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem --output /crl-output/nasa-leaf.crl
 ```
 
 Or install `cryptography==44.0.3` in host Python and run `bash scripts/refresh-crl.sh`. The updater accepts `PIV_CRL_URL` or `--url`, but only approved NASA/Treasury hosts. It verifies CRL authenticity and freshness before atomically replacing the old file; a failed download leaves the existing file untouched. A stale CRL **fails closed** at authentication even if a prior CRL remains on disk.
