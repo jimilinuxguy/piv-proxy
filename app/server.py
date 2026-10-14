@@ -7,7 +7,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 from cryptography import x509
-from cryptography.x509.oid import ExtensionOID, ExtendedKeyUsageOID
+from cryptography.x509.oid import ExtensionOID, ExtendedKeyUsageOID, NameOID
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
