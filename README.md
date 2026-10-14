@@ -43,7 +43,8 @@ http://hc.nasa.gov/combinedCRL5.crl
 Refresh using the application's pinned Python dependencies:
 
 ```bash
-docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" --user 0 app \
+docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" \
+  -v "$PWD/pki:/app/pki:rw" --user 0 app \
   python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem --output /app/pki/nasa-leaf.crl
 ```
 
