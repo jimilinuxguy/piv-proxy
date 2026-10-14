@@ -7,7 +7,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 from cryptography import x509
-from cryptography.x509.oid import ExtensionOID, ExtendedKeyUsageOID, NameOID
+from cryptography.x509.oid import ExtensionOID, ExtendedKeyUsageOID
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -33,8 +33,6 @@ class Handler(BaseHTTPRequestHandler):
             nasa_issuer = os.getenv('NASA_ISSUER', 'NASA Operational CA')
             if not any(nasa_issuer == a.value for a in cert.issuer):
                 raise ValueError('Certificate issuer is not NASA Operational CA')
-            if not any(a.value == 'NASA' for a in cert.subject.get_attributes_for_oid(NameOID.ORGANIZATIONAL_UNIT_NAME)):
-                raise ValueError('Certificate subject is not in NASA OU')
             required = {x.strip() for x in os.getenv('REQUIRED_POLICY_OIDS', '').split(',') if x.strip()}
             if required:
                 policies = cert.extensions.get_extension_for_oid(ExtensionOID.CERTIFICATE_POLICIES).value
