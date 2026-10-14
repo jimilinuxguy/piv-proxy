@@ -1,74 +1,99 @@
 # PIV Proxy — local NASA PIV mTLS gateway
 
-**Development demonstration only. Not approved for production use.** Runs on loopback-only ports. Uses a physical PIV smart card through your browser and NGINX client-certificate TLS verification.
+**Local development demonstration only. Not approved for production use.** Binds HTTPS ports to loopback. Uses the physical PIV card through browser mTLS and NGINX client-certificate verification. Strict PIV policy and leaf CRL verification are **enabled by default**.
 
-## Setup (macOS)
+## Quick setup (macOS)
 
-Requires Docker Desktop, Python 3, OpenSSL, and your NASA/Federal CA certificates available in macOS Keychain.
+Requires Docker Desktop, Python 3, OpenSSL, and the NASA/Federal CA certificates in macOS Keychain.
 
 ```bash
+git clone https://github.com/jimilinuxguy/piv-proxy.git
+cd piv-proxy
 bash scripts/setup.sh
-docker compose ps
+bash scripts/test.sh
 ```
 
-Visit https://localhost:8443/. The local self-signed HTTPS certificate may require a browser exception.
+The setup script extracts and verifies NASA CA certificates from macOS Keychain, creates `.env` from `.env.example`, downloads the NASA Operational CA CRL from its documented URL, verifies CRL signature/issuer/freshness, generates a local TLS certificate if necessary, then launches Docker Compose. On CRL validation or download failure it stops rather than silently disabling strict mode.
 
-1. Click **Sign in with NASA PIV** (port 8444).
-2. Choose the **PIV Authentication** certificate and enter the smart-card PIN if prompted.
-3. NGINX verifies the TLS certificate chain. The Python service checks validity, clientAuth EKU, NASA Operational CA issuer, and optionally policy OIDs.
-4. A 15-minute random Redis-backed session cookie is set with Secure, HttpOnly, and SameSite=Lax.
-5. The browser returns to https://localhost:8443/app/; NGINX uses `auth_request` to validate the session before proxying to the sample upstream.
-6. The upstream receives a server-controlled `X-Authenticated-User` header. The browser cannot override it.
+Navigate to https://localhost:8443/, select **Sign in with NASA PIV**, and choose the **PIV Authentication** certificate (not the unrelated Network-Auth certificate). You may need a browser exception for the self-signed local HTTPS server certificate.
 
-Click **Sign out** on the protected demo or landing page to revoke the current session. You will see a signed-out confirmation. Unauthenticated access to `/app/` returns to the landing page rather than silently initiating a new PIV login. Your browser may retain its mTLS client-certificate selection even after the application session is revoked.
+## Default strict configuration
 
-## Commands
+```dotenv
+PIV_STRICT=true
+REQUIRED_POLICY_OIDS=2.16.840.1.101.3.2.1.3.13
+NASA_ISSUER=NASA Operational CA
+PIV_CRL_PATH=/app/pki/nasa-leaf.crl
+PIV_ISSUER_PATH=/app/pki/nasa-operational.pem
+PIV_CRL_URL=http://hc.nasa.gov/combinedCRL5.crl
+```
+
+OID `2.16.840.1.101.3.2.1.3.13` is the federal PIV Authentication policy observed on the NASA PIV Authentication certificate. Confirm these values are appropriate for your agency and specific certificate before deployment. **Do not allowlist the distinct Network-Auth OID `1.3.6.1.4.1.71.1.1.9` as a substitute for PIV Authentication.**
+
+Compose reads these variables from `.env`. Restart after edits with `docker compose up -d --force-recreate`. Never commit `.env`, `pki/`, or `tls/`.
+
+## CRL refresh
+
+The observed NASA Operational CA PIV Authentication CRL URL is:
+
+```text
+http://hc.nasa.gov/combinedCRL5.crl
+```
+
+Refresh using the application's pinned Python dependencies:
 
 ```bash
-docker compose up -d --build
+docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" --user 0 app \
+  python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem --output /app/pki/nasa-leaf.crl
+```
+
+Or install `cryptography==44.0.3` in host Python and run `bash scripts/refresh-crl.sh`. The updater accepts `PIV_CRL_URL` or `--url`, but only approved NASA/Treasury hosts. It verifies CRL authenticity and freshness before atomically replacing the old file; a failed download leaves the existing file untouched. A stale CRL **fails closed** at authentication even if a prior CRL remains on disk.
+
+**Automate the refresh command daily** using a host scheduler (launchd or cron). Docker's read-only mount reflects the atomically replaced file, so no container restart should be required. Refreshes are not performed by individual login requests, and the updater does not follow arbitrary certificate-supplied URLs.
+
+Inspect validity:
+
+```bash
+openssl crl -inform DER -in pki/nasa-leaf.crl -noout -issuer -lastupdate -nextupdate
+openssl crl -inform DER -in pki/nasa-leaf.crl -CAfile pki/nasa-operational.pem -verify -noout
+```
+
+The CRL may be PEM instead of DER; omit `-inform DER` in that case.
+
+## Troubleshooting
+
+- `Strict mode requires approved PIV policy OIDs`: configure `REQUIRED_POLICY_OIDS`.
+- `Missing approved PIV certificate policy`: inspect the **actual certificate presented to nginx**. The correct PIV Auth OID above differs from Network-Auth.
+- `Revocation data unavailable or invalid`: check `pki/nasa-leaf.crl`, `pki/nasa-operational.pem`, Docker mounts and file permissions.
+- `Revocation list is stale or not yet valid`: refresh the CRL; do not disable strict mode.
+- `No valid issuer signature for PIV revocation list`: verify CRL scope and issuing CA; do not reuse the NDC Issuing CA 3 CRL for NASA Operational CA credentials.
+- `PIV certificate is revoked`: expected hard denial.
+- Browser selection issues: select the PIV Authentication certificate and verify the card/reader works in macOS.
+
+```bash
 docker compose ps
 docker compose logs --tail=100 nginx app redis demo
-curl -vk https://localhost:8443/
-curl -vk https://localhost:8443/app/  # redirects to landing page when not authenticated
+docker compose exec app sh -c 'env | grep -E "PIV_STRICT|REQUIRED_POLICY_OIDS|NASA_ISSUER"'
 docker compose down
 ```
 
-## Security and limitations
+To invalidate existing demo sessions after changes, `docker compose restart redis`.
 
-- **Revocation is NOT implemented** (neither OCSP nor CRL). A revoked PIV certificate could be accepted.
-- **Policy OID allowlisting is opt-in** via `REQUIRED_POLICY_OIDS`; identify approved policy OIDs from your organization before enabling. Empty means no policy check.
-- **No account authorization** or personnel directory mapping. A NASA-issued credential is not proof of access entitlement.
-- The application relies on mTLS verification by NGINX; do not expose the Python service directly or let untrusted services join its Docker network.
-- The demo upstream is intentionally simple and does not implement business authorization.
-- Redis sessions are ephemeral (no persistence), 15 minutes, with no sliding expiration.
-- The self-signed server certificate is for local testing only.
-- Do not commit `tls/`, `pki/`, `.env`, session secrets, card certificates, or personal data.
+## Architecture and limitations
 
-**Before any nonlocal deployment:** implement fail-closed certificate revocation, approved policy OID enforcement, real account authorization, a trusted server certificate, ingress/network restrictions, CSRF protections where applicable, and security review.
+- NGINX on 8444 requires and verifies client TLS certificates against `pki/client-ca.pem`. The app validates validity dates, clientAuth EKU, required PIV policy, matching issuer, and leaf certificate revocation in a signed, current CRL.
+- Only the browser-facing TLS client certificate from nginx is accepted; do not publish the Python service or grant untrusted containers access to its network.
+- Authenticated sessions last 15 minutes in ephemeral Redis with Secure, HttpOnly and SameSite=Lax cookies. NGINX protects `/app/` using `auth_request`, sending server-controlled identity headers to the demo.
+- **Not production authorization:** no personnel directory authorization or role mapping; CA chain-wide revocation, OCSP, delta/indirect or partitioned CRL support, server-side CSRF defenses, and continuous session revocation are outside this demo.
+- Existing sessions survive a certificate revocation until session expiry unless invalidated. NGINX's chain verification is separate from Python's leaf-CRL validation.
+- Local self-signed TLS is for development. Keep the network loopback-only and do not expose or deploy without independent security review.
 
-## Components
+## Tests
 
-- `nginx/default.conf`: public landing page, PIV-only login, authenticated reverse proxy.
-- `app/server.py`: validates the certificate presented by NGINX and manages Redis sessions.
-- `demo/server.py`: sample protected upstream.
-- `compose.yaml`: NGINX, app, Redis and demo services.
-- `scripts/`: CA extraction, local TLS setup, diagnostics.
+```bash
+python3 -m pip install 'cryptography==44.0.3' 'redis==5.2.1'
+python3 -m unittest discover -s tests -v
+bash scripts/test.sh
+```
 
-## Strict policy and CRL revocation mode (opt-in; fail closed)
-
-**Do not enable until you have an approved policy allowlist and a current complete CRL issued by the CA that signed your PIV Authentication certificate.** Neither the policy OIDs nor CRL can be safely guessed from a NASA issuer name. This implementation verifies the *leaf certificate only*, not revocation of intermediate CAs. It is **not yet production-complete**.
-
-1. Export your **public PIV Authentication certificate** to a local PEM file (never the private key). Inspect it with `bash scripts/inspect-piv-cert.sh /path/to/piv-auth.pem`.
-2. Obtain the approved PIV Authentication policy OID(s) from your agency's PKI policy documentation. Verify they appear in the certificate's Certificate Policies extension.
-3. Obtain the **complete, current issuer CRL** from the certificate's CRL Distribution Points, using an agency-approved trusted source. Save it as `pki/nasa-leaf.crl` (PEM or DER). **Do not commit it.** If there are multiple issuing CAs or partitioned CRLs, the single-file verifier may not cover your certificate and will reject it.
-4. Create a local `.env`:
-   ```dotenv
-   PIV_STRICT=true
-   REQUIRED_POLICY_OIDS=<agency-approved-PIV-authentication-policy-OID>
-   ```
-   Replace the placeholder with an actual approved numeric OID; do not copy it literally.
-5. Run `docker compose up -d --build app` and sign in again. If the CRL is missing, stale, signed by a different CA, or lists the card serial as revoked, login fails.
-
-**Important:** Existing sessions created before enabling strict mode remain valid until expiry or logout. For a clean cutover, revoke all sessions by restarting the ephemeral Redis container with `docker compose restart redis`. This is a local-demo convenience, not production-grade revocation of active sessions.
-
-The strict verifier checks the CRL signature using the matching locally provisioned NASA Operational CA certificate, issuer name, available key identifiers, validity window, and leaf serial number. It rejects delta and indirect CRLs. It does **not** download/refresh CRLs, support OCSP, check CA revocation, or perform authorization. Refresh the CRL securely before `nextUpdate`. If no current CRL is available, strict login fails. For production, implement full path-wide revocation and policy validation, agency authorization, trusted revocation distribution, and session invalidation on revocation.
+Tests use a local synthetic CA and CRLs; no actual NASA certificates or private key material is required.
