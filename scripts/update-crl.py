@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
 
 from cryptography import x509
 
@@ -74,7 +74,17 @@ def refresh(url, issuer_path, output_path, allowed_hosts=None):
         raise ValueError("Unsupported CRL URL authority")
     issuer_bundle = Path(issuer_path).read_bytes()
     req = Request(url, headers={"User-Agent": "local-piv-crl-refresh/1.0"})
-    with urlopen(req, timeout=30) as response:
+    class RestrictedRedirects(HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, msg, headers, newurl):
+            candidate = urlparse(newurl)
+            if (candidate.scheme not in {"http", "https"} or
+                    candidate.hostname not in allowed_hosts or
+                    candidate.username or candidate.password or
+                    candidate.port not in (None, 80, 443)):
+                raise ValueError("CRL redirect to unapproved endpoint")
+            return super().redirect_request(request, fp, code, msg, headers, newurl)
+
+    with build_opener(RestrictedRedirects()).open(req, timeout=30) as response:
         final_url = urlparse(response.geturl())
         if (final_url.scheme not in {"http", "https"} or final_url.hostname not in allowed_hosts
                 or final_url.username or final_url.password):
