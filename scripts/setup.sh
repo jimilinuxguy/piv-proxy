@@ -21,10 +21,10 @@ docker compose build app
 CRL_URL="${PIV_CRL_URL:-$(sed -n 's/^PIV_CRL_URL=//p' .env | tail -1)}"
 CRL_URL="${CRL_URL:-http://hc.nasa.gov/combinedCRL5.crl}"
 docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" \
-  -v "$PWD/pki:/app/pki:rw" \
+  -v "$PWD/pki:/crl-output:rw" \
   -e PIV_CRL_URL="$CRL_URL" \
   --user 0 app python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem \
-  --output /app/pki/nasa-leaf.crl
+  --output /crl-output/nasa-leaf.crl
 if [ ! -f tls/localhost.crt ] || [ ! -f tls/localhost.key ]; then
   openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
     -keyout tls/localhost.key -out tls/localhost.crt \
