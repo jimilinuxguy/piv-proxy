@@ -5,6 +5,11 @@ command -v docker >/dev/null || { echo 'Install Docker Desktop first'; exit 1; }
 command -v openssl >/dev/null || { echo 'OpenSSL required'; exit 1; }
 command -v python3 >/dev/null || { echo 'Python 3 required'; exit 1; }
 mkdir -p pki tls
+# A missing bind-mount source can appear as a confusing nginx startup error.
+if [ ! -f nginx/default.conf ]; then
+  echo 'ERROR: nginx/default.conf missing. Run setup from a complete repository checkout.' >&2
+  exit 1
+fi
 if [ ! -f .env ]; then
   cp .env.example .env
   echo 'Created .env using strict PIV defaults.'
