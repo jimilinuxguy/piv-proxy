@@ -20,7 +20,7 @@ Visit https://localhost:8443/. The local self-signed HTTPS certificate may requi
 5. The browser returns to https://localhost:8443/app/; NGINX uses `auth_request` to validate the session before proxying to the sample upstream.
 6. The upstream receives a server-controlled `X-Authenticated-User` header. The browser cannot override it.
 
-Click **Sign out** on the landing page to revoke the current session.
+Click **Sign out** on the protected demo or landing page to revoke the current session. You will see a signed-out confirmation. Unauthenticated access to `/app/` returns to the landing page rather than silently initiating a new PIV login. Your browser may retain its mTLS client-certificate selection even after the application session is revoked.
 
 ## Commands
 
@@ -29,7 +29,7 @@ docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 nginx app redis demo
 curl -vk https://localhost:8443/
-curl -vk https://localhost:8443/app/  # redirects to PIV login when not authenticated
+curl -vk https://localhost:8443/app/  # redirects to landing page when not authenticated
 docker compose down
 ```
 
