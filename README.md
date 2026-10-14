@@ -92,8 +92,12 @@ To invalidate existing demo sessions after changes, `docker compose restart redi
 ## Tests
 
 ```bash
-python3 -m pip install 'cryptography==44.0.3' 'redis==5.2.1'
-python3 -m unittest discover -s tests -v
+bash scripts/run-unit-tests.sh
+# Or manually:
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
 bash scripts/test.sh
 ```
 
