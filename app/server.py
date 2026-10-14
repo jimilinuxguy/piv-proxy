@@ -34,8 +34,20 @@ def check_revocation(cert, now):
                else x509.load_der_x509_crl(crl_bytes))
     except (OSError, ValueError) as exc:
         raise ValueError("Revocation data unavailable or invalid") from exc
-    if not (crl.last_update_utc <= now < crl.next_update_utc):
+    if crl.next_update_utc is None or not (crl.last_update_utc <= now < crl.next_update_utc):
         raise ValueError("Revocation list is stale or not yet valid")
+    # Delta and indirect CRLs require additional processing; never silently treat them as complete.
+    try:
+        crl.extensions.get_extension_for_class(x509.DeltaCRLIndicator)
+        raise ValueError("Delta CRL is not supported; provide a complete base CRL")
+    except x509.ExtensionNotFound:
+        pass
+    try:
+        idp = crl.extensions.get_extension_for_class(x509.IssuingDistributionPoint).value
+        if idp.indirect_crl or idp.only_some_reasons or idp.only_contains_attribute_certs:
+            raise ValueError("Restricted or indirect CRL is not supported")
+    except x509.ExtensionNotFound:
+        pass
     candidates = [issuer for issuer in issuer_certs
                   if issuer.subject == cert.issuer and issuer.subject == crl.issuer]
     for issuer in candidates:
