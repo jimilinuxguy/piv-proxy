@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
 
 from cryptography import x509
+from cryptography.x509.oid import ExtensionOID
 
 DEFAULT_URL = "http://hc.nasa.gov/combinedCRL5.crl"
 DEFAULT_HOSTS = {"hc.nasa.gov", "pki.treasury.gov"}
