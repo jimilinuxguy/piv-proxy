@@ -11,7 +11,9 @@ services:
     depends_on: [app, demo]
     restart: unless-stopped
   app:
-    build: ./app
+    build:
+      context: .
+      dockerfile: app/Dockerfile
     environment:
       REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-2.16.840.1.101.3.2.1.3.13}
       REDIS_URL: redis://redis:6379/0
