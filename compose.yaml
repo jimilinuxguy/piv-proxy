@@ -13,12 +13,12 @@ services:
   app:
     build: ./app
     environment:
-      NASA_ISSUER: NASA Operational CA
-      REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-}
+      NASA_ISSUER: ${NASA_ISSUER:-NASA Operational CA}
+      REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-2.16.840.1.101.3.2.1.3.13}
       REDIS_URL: redis://redis:6379/0
-      PIV_STRICT: ${PIV_STRICT:-false}
-      PIV_CRL_PATH: /app/pki/nasa-leaf.crl
-      PIV_ISSUER_PATH: /app/pki/nasa-operational.pem
+      PIV_STRICT: ${PIV_STRICT:-true}
+      PIV_CRL_PATH: ${PIV_CRL_PATH:-/app/pki/nasa-leaf.crl}
+      PIV_ISSUER_PATH: ${PIV_ISSUER_PATH:-/app/pki/nasa-operational.pem}
     volumes:
       - ./pki:/app/pki:ro
     depends_on: [redis]
