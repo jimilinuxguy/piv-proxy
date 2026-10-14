@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from cryptography import x509
-from cryptography.x509.oid import ExtensionOID, ExtendedKeyUsageOID
+from cryptography.x509.oid import ExtensionOID
 
 DEFAULT_URL = "http://hc.nasa.gov/combinedCRL5.crl"
 DEFAULT_HOSTS = {"hc.nasa.gov", "pki.treasury.gov"}
@@ -111,7 +111,7 @@ def main():
     args = parser.parse_args()
     try:
         refresh(args.url, args.issuer, args.output)
-    except (OSError, ValueError, TimeoutError, Exception) as exc:
+    except Exception as exc:
         print(f"CRL refresh failed (existing CRL preserved): {exc}", file=sys.stderr)
         return 1
     return 0
