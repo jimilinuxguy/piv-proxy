@@ -10,6 +10,7 @@ class Handler(BaseHTTPRequestHandler):
         identity = html.escape(self.headers.get("X-Authenticated-User", ""))
         body = ("<!doctype html><html><body><h2>Protected application</h2>"
                 f"<p>Authenticated as: {identity}</p>"
+                '<form method="POST" action="/logout"><button type="submit">Sign out</button></form>'
                 '<p><a href="/">Home</a></p></body></html>').encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
