@@ -11,7 +11,6 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from cryptography import x509
-from cryptography.x509.oid import ExtensionOID
 
 DEFAULT_URL = "http://hc.nasa.gov/combinedCRL5.crl"
 DEFAULT_HOSTS = {"hc.nasa.gov", "pki.treasury.gov"}
@@ -40,8 +39,7 @@ def verify_crl(data, issuer_bundle, now=None):
     except x509.ExtensionNotFound:
         idp = None
     if idp and (idp.indirect_crl or idp.only_some_reasons or
-                idp.only_contains_attribute_certs or idp.only_contains_ca_certs or
-                (idp.only_contains_user_certs and idp.full_name is not None)):
+                idp.only_contains_attribute_certs or idp.only_contains_ca_certs):
         raise ValueError("restricted or indirect CRL unsupported")
     certs = [x509.load_pem_x509_certificate(match.group(0))
              for match in CERT_PATTERN.finditer(issuer_bundle)]
