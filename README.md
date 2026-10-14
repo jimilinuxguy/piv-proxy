@@ -1,4 +1,4 @@
-# PIV Proxy — local NASA PIV mTLS gateway
+# PIV Proxy — configurable local PIV mTLS gateway
 
 **Local development demonstration only. Not approved for production use.** Binds HTTPS ports to loopback. Uses the physical PIV card through browser mTLS and NGINX client-certificate verification. Strict PIV policy and leaf CRL verification are **enabled by default**.
 
@@ -15,16 +15,16 @@ bash scripts/test.sh
 
 The setup script extracts and verifies NASA CA certificates from macOS Keychain, creates `.env` from `.env.example`, downloads the NASA Operational CA CRL from its documented URL, verifies CRL signature/issuer/freshness, generates a local TLS certificate if necessary, then launches Docker Compose. On CRL validation or download failure it stops rather than silently disabling strict mode.
 
-Navigate to https://localhost:8443/, select **Sign in with NASA PIV**, and choose the **PIV Authentication** certificate (not the unrelated Network-Auth certificate). You may need a browser exception for the self-signed local HTTPS server certificate.
+Navigate to https://localhost:8443/, select **Sign in with PIV card**, and choose the **PIV Authentication** certificate (not the unrelated Network-Auth certificate). You may need a browser exception for the self-signed local HTTPS server certificate.
 
 ## Default strict configuration
 
 ```dotenv
 PIV_STRICT=true
 REQUIRED_POLICY_OIDS=2.16.840.1.101.3.2.1.3.13
-NASA_ISSUER=NASA Operational CA
 PIV_CRL_PATH=/app/pki/nasa-leaf.crl
 PIV_ISSUER_PATH=/app/pki/nasa-operational.pem
+PIV_CRL_DIRECTORY=/app/pki/crls
 PIV_CRL_URL=http://hc.nasa.gov/combinedCRL5.crl
 ```
 
@@ -48,7 +48,7 @@ docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" \
   python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem --output /crl-output/nasa-leaf.crl
 ```
 
-Or install `cryptography==44.0.3` in host Python and run `bash scripts/refresh-crl.sh`. The updater accepts `PIV_CRL_URL` or `--url`, but only approved NASA/Treasury hosts. It verifies CRL authenticity and freshness before atomically replacing the old file; a failed download leaves the existing file untouched. A stale CRL **fails closed** at authentication even if a prior CRL remains on disk.
+Or install `cryptography==44.0.3` in host Python and run `bash scripts/refresh-crl.sh`. The updater accepts `PIV_CRL_URL` or `--url`, but only hosts in `PIV_CRL_ALLOWED_HOSTS` (defaults to NASA/Treasury). It verifies CRL authenticity and freshness before atomically replacing the old file; a failed download leaves the existing file untouched. A stale CRL **fails closed** at authentication even if a prior CRL remains on disk.
 
 **Automate the refresh command daily** using a host scheduler (launchd or cron). Docker's read-only mount reflects the atomically replaced file, so no container restart should be required. Refreshes are not performed by individual login requests, and the updater does not follow arbitrary certificate-supplied URLs.
 
@@ -98,3 +98,11 @@ bash scripts/test.sh
 ```
 
 Tests use a local synthetic CA and CRLs; no actual NASA certificates or private key material is required.
+
+## Agency-neutral configuration
+
+The Python gateway does not hardcode NASA issuer names. It checks the client certificate issuer against the certificates in `PIV_ISSUER_PATH`, enforces `REQUIRED_POLICY_OIDS`, and verifies a signed current CRL from the matching issuer. NGINX independently verifies the TLS chain using `pki/client-ca.pem`. **Both trust bundles must be provisioned for the target agency.** A certificate issued by another CA is not automatically trusted.
+
+For multiple issuers, put their issuing CA certificates in a PEM bundle at `PIV_ISSUER_PATH`, and put each issuer's verified, current CRL in `pki/crls/` (or `PIV_CRL_DIRECTORY`). When this directory exists, it supersedes the legacy single `PIV_CRL_PATH`. Refresh each CRL separately with `scripts/update-crl.py --issuer ... --output ...`. Set `PIV_CRL_ALLOWED_HOSTS` to an explicit comma-separated host allowlist for your agency; certificate-supplied URLs are never fetched automatically. Never disable strict mode to onboard a new issuer.
+
+`scripts/setup.sh` and `scripts/fetch-nasa-piv-cas.sh` remain a NASA convenience bootstrap; to provision another agency, supply the trusted CA bundle, issuer bundle, CRLs and policy OIDs yourself before starting Compose. The NASA example policy remains the default until you change it.
