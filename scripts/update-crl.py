@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh a verified NASA Operational CA CRL, preserving the last good file on errors."""
+"""Refresh a verified issuer CRL, preserving the last good file on errors."""
 import argparse
 import datetime as dt
 import os
@@ -68,9 +68,9 @@ def verify_crl(data, issuer_bundle, now=None):
 
 def refresh(url, issuer_path, output_path, allowed_hosts=None):
     parsed = urlparse(url)
-    allowed_hosts = allowed_hosts or DEFAULT_HOSTS
+    allowed_hosts = allowed_hosts if allowed_hosts is not None else {h.strip().lower() for h in os.environ.get("PIV_CRL_ALLOWED_HOSTS", ",".join(sorted(DEFAULT_HOSTS))).split(",") if h.strip()}
     if parsed.scheme not in {"http", "https"} or parsed.hostname not in allowed_hosts:
-        raise ValueError("CRL URL must be an explicitly approved NASA/Treasury endpoint")
+        raise ValueError("CRL URL must be an explicitly approved endpoint")
     if parsed.username or parsed.password or parsed.port not in (None, 80, 443):
         raise ValueError("Unsupported CRL URL authority")
     issuer_bundle = Path(issuer_path).read_bytes()
@@ -96,7 +96,7 @@ def refresh(url, issuer_path, output_path, allowed_hosts=None):
     crl = verify_crl(data, issuer_bundle)
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmpname = tempfile.mkstemp(prefix=".nasa-crl-", dir=str(destination.parent))
+    fd, tmpname = tempfile.mkstemp(prefix=".piv-crl-", dir=str(destination.parent))
     try:
         with os.fdopen(fd, "wb") as output:
             output.write(data)
@@ -115,8 +115,8 @@ def refresh(url, issuer_path, output_path, allowed_hosts=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=os.environ.get("PIV_CRL_URL", DEFAULT_URL))
-    parser.add_argument("--issuer", default="pki/nasa-operational.pem")
-    parser.add_argument("--output", default="pki/nasa-leaf.crl")
+    parser.add_argument("--issuer", default=os.environ.get("PIV_CRL_ISSUER_FILE", "pki/nasa-operational.pem"))
+    parser.add_argument("--output", default=os.environ.get("PIV_CRL_OUTPUT_FILE", "pki/nasa-leaf.crl"))
     args = parser.parse_args()
     try:
         refresh(args.url, args.issuer, args.output)
