@@ -16,6 +16,11 @@ services:
       NASA_ISSUER: NASA Operational CA
       REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-}
       REDIS_URL: redis://redis:6379/0
+      PIV_STRICT: ${PIV_STRICT:-false}
+      PIV_CRL_PATH: /app/pki/nasa-leaf.crl
+      PIV_ISSUER_PATH: /app/pki/nasa-operational.pem
+    volumes:
+      - ./pki:/app/pki:ro
     depends_on: [redis]
     expose: ["8000"]
     restart: unless-stopped
