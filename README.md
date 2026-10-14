@@ -53,3 +53,22 @@ docker compose down
 - `demo/server.py`: sample protected upstream.
 - `compose.yaml`: NGINX, app, Redis and demo services.
 - `scripts/`: CA extraction, local TLS setup, diagnostics.
+
+## Strict policy and CRL revocation mode (opt-in; fail closed)
+
+**Do not enable until you have an approved policy allowlist and a current complete CRL issued by the CA that signed your PIV Authentication certificate.** Neither the policy OIDs nor CRL can be safely guessed from a NASA issuer name. This implementation verifies the *leaf certificate only*, not revocation of intermediate CAs. It is **not yet production-complete**.
+
+1. Export your **public PIV Authentication certificate** to a local PEM file (never the private key). Inspect it with `bash scripts/inspect-piv-cert.sh /path/to/piv-auth.pem`.
+2. Obtain the approved PIV Authentication policy OID(s) from your agency's PKI policy documentation. Verify they appear in the certificate's Certificate Policies extension.
+3. Obtain the **complete, current issuer CRL** from the certificate's CRL Distribution Points, using an agency-approved trusted source. Save it as `pki/nasa-leaf.crl` (PEM or DER). **Do not commit it.** If there are multiple issuing CAs or partitioned CRLs, the single-file verifier may not cover your certificate and will reject it.
+4. Create a local `.env`:
+   ```dotenv
+   PIV_STRICT=true
+   REQUIRED_POLICY_OIDS=<agency-approved-PIV-authentication-policy-OID>
+   ```
+   Replace the placeholder with an actual approved numeric OID; do not copy it literally.
+5. Run `docker compose up -d --build app` and sign in again. If the CRL is missing, stale, signed by a different CA, or lists the card serial as revoked, login fails.
+
+**Important:** Existing sessions created before enabling strict mode remain valid until expiry or logout. For a clean cutover, revoke all sessions by restarting the ephemeral Redis container with `docker compose restart redis`. This is a local-demo convenience, not production-grade revocation of active sessions.
+
+The strict verifier checks the CRL signature using the matching locally provisioned NASA Operational CA certificate, issuer name, available key identifiers, validity window, and leaf serial number. It rejects delta and indirect CRLs. It does **not** download/refresh CRLs, support OCSP, check CA revocation, or perform authorization. Refresh the CRL securely before `nextUpdate`. If no current CRL is available, strict login fails. For production, implement full path-wide revocation and policy validation, agency authorization, trusted revocation distribution, and session invalidation on revocation.
