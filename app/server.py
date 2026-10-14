@@ -101,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
         except redis.RedisError:
             return self.respond(503, "Session store unavailable")
         cookie = f"{COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
-        return self.respond(303, "", headers={"Set-Cookie": cookie, "Location": "https://localhost:8443/"})
+        return self.respond(303, "", headers={"Set-Cookie": cookie, "Location": "https://localhost:8443/signed-out"})
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
