@@ -8,12 +8,23 @@ services:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./pki:/etc/nginx/pki:ro
       - ./tls:/etc/nginx/tls:ro
-    depends_on: [app]
+    depends_on: [app, demo]
     restart: unless-stopped
   app:
     build: ./app
     environment:
-      - NASA_ISSUER=NASA Operational CA
-      - REQUIRED_POLICY_OIDS=${REQUIRED_POLICY_OIDS:-}
+      NASA_ISSUER: NASA Operational CA
+      REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-}
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [redis]
     expose: ["8000"]
+    restart: unless-stopped
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "32mb", "--maxmemory-policy", "noeviction"]
+    expose: ["6379"]
+    restart: unless-stopped
+  demo:
+    build: ./demo
+    expose: ["8001"]
     restart: unless-stopped
