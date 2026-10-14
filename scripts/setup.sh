@@ -12,8 +12,12 @@ fi
 bash scripts/fetch-nasa-piv-cas.sh
 # Refresh with the cryptography dependency from the app image, without requiring host pip.
 docker compose build app
+# Read only the explicitly configured URL from Compose interpolation, without sourcing .env as shell code.
+CRL_URL="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["app"]["environment"].get("PIV_CRL_URL", ""))')" 
+CRL_URL="${CRL_URL:-$(grep -E '^PIV_CRL_URL=' .env | tail -1 | cut -d= -f2-)}"
+CRL_URL="${CRL_URL:-http://hc.nasa.gov/combinedCRL5.crl}"
 docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" \
-  -e PIV_CRL_URL="${PIV_CRL_URL:-http://hc.nasa.gov/combinedCRL5.crl}" \
+  -e PIV_CRL_URL="$CRL_URL" \
   --user 0 app python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem \
   --output /app/pki/nasa-leaf.crl
 if [ ! -f tls/localhost.crt ] || [ ! -f tls/localhost.key ]; then
