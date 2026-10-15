@@ -194,7 +194,7 @@ def validate_api(headers):
             not isinstance(claims.get("certificate_sha256"), str) or
             len(claims["certificate_sha256"]) != 64 or
             any(c not in "0123456789abcdef" for c in claims["certificate_sha256"]) or
-            claims.get("subject_id") != oidc.persistent_subject(claims["certificate_sha256"] or
+            claims.get("subject_id") != oidc.persistent_subject(claims["certificate_sha256"]) or
             claims.get("auth_method") != "piv"):
         return 401, {"authenticated": False}
     ttl = STORE.ttl("session:" + token)
