@@ -3,11 +3,12 @@ import datetime
 import html
 import json
 import hmac
+import oidc
 import os
 import secrets
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlsplit, parse_qs
+from urllib.parse import unquote, urlsplit, parse_qs, quote
 import redis
 from pathlib import Path
 from cryptography import x509
@@ -212,6 +213,34 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        route = urlsplit(self.path).path
+        if route in ("/.well-known/openid-configuration", "/jwks.json"):
+            try:
+                if os.getenv("OIDC_ENABLED", "false").lower() != "true":
+                    return self.respond(404, "Not found")
+                payload = oidc.discovery() if route.startswith("/.well-known") else oidc.jwks()
+                return self.respond(200, json.dumps(payload), "application/json")
+            except (ValueError, OSError):
+                return self.respond(503, "OIDC configuration unavailable")
+        if route == "/authorize":
+            try:
+                request_id = oidc.create_request(STORE, parse_qs(urlsplit(self.path).query, keep_blank_values=True))
+            except (ValueError, redis.RedisError, OSError) as exc:
+                return self.respond(400, "Authorization request rejected")
+            return self.respond(303, "", headers={"Location": "https://localhost:8444/login?oidc_request=" + quote(request_id)})
+        if route == "/oidc/complete":
+            try:
+                request_id = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
+                destination = oidc.authorize_from_session(STORE, request_id, session_token(self.headers))
+            except (ValueError, redis.RedisError, TypeError):
+                return self.respond(401, "Authorization expired; restart CAC/PIV login")
+            return self.respond(303, "", headers={"Location": destination})
+        if route == "/userinfo":
+            try:
+                claims = oidc.userinfo(STORE, self.headers.get("Authorization", "")) if os.getenv("OIDC_ENABLED", "false").lower() == "true" else None
+            except redis.RedisError:
+                return self.respond(503, "Session store unavailable")
+            return self.respond(200, json.dumps(claims), "application/json") if claims else self.respond(401, '{"error":"invalid_token"}', "application/json")
         if self.path == "/healthz":
             return self.respond(200, "ok")
         if self.path == "/api/v1/session/validate":
@@ -235,7 +264,13 @@ class Handler(BaseHTTPRequestHandler):
             if not encoded:
                 return self.respond(403, "PIV rejected: missing client certificate")
             try:
-                destination = callback_url(self.path)
+                oidc_requests = parse_qs(urlsplit(self.path).query).get("oidc_request", [])
+                if oidc_requests:
+                    if len(oidc_requests) != 1 or not STORE.exists("oidc-request:" + oidc_requests[0]):
+                        raise ValueError("OIDC authorization request expired")
+                    destination = "https://localhost:8443/oidc/complete?id=" + quote(oidc_requests[0])
+                else:
+                    destination = callback_url(self.path)
                 identity, fingerprint = validate_piv(encoded)
                 token = secrets.token_hex(32)
                 # A new random session is issued only after NGINX verified client mTLS.
@@ -247,6 +282,18 @@ class Handler(BaseHTTPRequestHandler):
         return self.respond(404, "Not found")
 
     def do_POST(self):
+        if self.path == "/token":
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 8192 or self.headers.get("Content-Type", "").split(";")[0].strip() != "application/x-www-form-urlencoded":
+                    return self.respond(400, '{"error":"invalid_request"}', "application/json")
+                form = parse_qs(self.rfile.read(size).decode("utf-8"), keep_blank_values=True)
+                payload = oidc.exchange_code(STORE, form)
+                return self.respond(200, json.dumps(payload), "application/json")
+            except (ValueError, UnicodeError, OSError):
+                return self.respond(400, '{"error":"invalid_grant"}', "application/json")
+            except redis.RedisError:
+                return self.respond(503, '{"error":"temporarily_unavailable"}', "application/json")
         if self.path != "/logout":
             return self.respond(404, "Not found")
         token = session_token(self.headers)
