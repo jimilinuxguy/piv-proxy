@@ -131,11 +131,11 @@ def callback_url(request_path):
     if parsed.fragment or parsed.username or parsed.password:
         raise ValueError("Invalid callback URL")
     if target.startswith("/") and not target.startswith("//"):
-        return oidc.issuer() + target
+        return os.getenv("PIV_PUBLIC_ORIGIN", "https://localhost:8443").rstrip("/") + target
     if parsed.scheme != "https" or not parsed.hostname or not parsed.netloc:
         raise ValueError("Callback must be HTTPS and explicitly allowed")
     allowed = {x.strip().rstrip("/") for x in
-               os.getenv("PIV_CALLBACK_ALLOWED_ORIGINS", oidc.issuer()).split(",")
+               os.getenv("PIV_CALLBACK_ALLOWED_ORIGINS", os.getenv("PIV_PUBLIC_ORIGIN", "https://localhost:8443")).split(",")
                if x.strip()}
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if origin not in allowed:
