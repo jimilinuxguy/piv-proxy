@@ -253,3 +253,28 @@ docker compose exec app sh -c 'env | grep -E "PIV_STRICT|REQUIRED_POLICY_OIDS|PI
 ## Security boundaries and limitations
 
 NGINX binds ports 8443 and 8444 to localhost, and the Python app is internal to Compose. The session lasts 15 minutes and uses Secure, HttpOnly, SameSite=Lax cookies. The gateway is a local demonstration: it does not provide personnel directory authorization, full CA-chain revocation, OCSP, delta/indirect or partitioned CRL processing, continuous revocation of existing sessions, or production CSRF hardening. Existing sessions may remain valid until expiry after certificate revocation. Do not expose the service publicly without a security review.
+
+## Existing application integration contract (POC)
+
+An OIDC-enabled relying party should configure the issuer URL, client ID, exact HTTPS redirect URI, and scopes `openid profile`. Public clients must use PKCE S256. Confidential clients may additionally supply `client_secret` in the form-encoded token request when configured with `client_secret_post`.
+
+The optional structured client registration in `OIDC_CLIENTS_JSON` is:
+
+```json
+{
+  "my-application": {
+    "redirect_uris": ["https://myapp.example.test/oidc/callback"],
+    "post_logout_redirect_uris": ["https://myapp.example.test/"],
+    "scopes": ["openid", "profile"],
+    "token_endpoint_auth_method": "none"
+  }
+}
+```
+
+For confidential clients, set `token_endpoint_auth_method` to `client_secret_post` and provision a high-entropy `client_secret` through secret management. The registered logout redirect is invoked through `GET /oidc/logout?client_id=my-application&post_logout_redirect_uri=...`; this clears the PIV Proxy browser session, but **does not automatically invalidate independently issued application sessions**.
+
+The `sub` claim remains the certificate SHA-256 identifier by default. To retain a stable subject across renewals, an authorized administrator may provision `PIV_SUBJECT_MAP_JSON` entries from the verified certificate SHA-256 hex fingerprint to a persistent organizational identifier. Never derive this mapping from common names alone. This mapping is manually managed and must be updated as new certificates are issued.
+
+Set `OIDC_ISSUER` to the browser-visible HTTPS origin and `PIV_MTLS_ORIGIN` to the browser-visible HTTPS smart-card endpoint; both must be reachable by the browser. The local Docker demo uses internal HTTP only for back-channel token exchange and must not be copied to a cross-host production topology.
+
+**Not yet delivered:** automatic key rotation and multi-key JWKS overlap, refresh-token issuance, automatic identity-directory integration, federated single logout, comprehensive OIDC conformance testing, and a production deployment/security assessment. Treat the current endpoint and client features as POC-only.
