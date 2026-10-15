@@ -278,3 +278,15 @@ The `sub` claim remains the certificate SHA-256 identifier by default. To retain
 Set `OIDC_ISSUER` to the browser-visible HTTPS origin and `PIV_MTLS_ORIGIN` to the browser-visible HTTPS smart-card endpoint; both must be reachable by the browser. The local Docker demo uses internal HTTP only for back-channel token exchange and must not be copied to a cross-host production topology.
 
 **Not yet delivered:** automatic key rotation and multi-key JWKS overlap, refresh-token issuance, automatic identity-directory integration, federated single logout, comprehensive OIDC conformance testing, and a production deployment/security assessment. Treat the current endpoint and client features as POC-only.
+
+## POC acceptance checklist and operational limits
+
+1. Run `python -m unittest discover -s tests -v` and `docker compose config --quiet`; GitHub Actions also executes these checks.
+2. Configure a registered client with `redirect_uris`, `post_logout_redirect_uris`, and `scopes`. Set `OIDC_ENABLED=true`, `OIDC_ISSUER=https://localhost:8443`, and `PIV_PUBLIC_ORIGIN=https://localhost:8443`.
+3. Use `https://localhost:8445/` for the standalone relying-party demonstration. The demo uses authorization code + PKCE, verifies signed ID tokens, and owns its application session.
+4. On logout the demo clears its own session and redirects to the issuer end-session endpoint. **Other relying parties must independently clear their own sessions**; this is not full OIDC back-channel logout.
+5. For signing key rotation run `python3 scripts/rotate-oidc-key.py` from the host. Retain old public keys in `oidc/previous/` until old tokens and client JWKS caches expire. Configure host scheduling separately only after establishing backups, monitoring, and coordinated deployment. Automated rotation is not enabled by default.
+6. Verify on a workstation with a real NASA PIV/CAC: certificate selection, accepted chain, current CRLs, authorization redirect, ID token, UserInfo, and sign-out. This **cannot be exercised by GitHub-hosted CI** without a real card and trusted PKI.
+7. Test a separate established OIDC client library against discovery and JWKS before claiming third-party interoperability. The included demo is an independently implemented client, not certification of other libraries.
+
+**Security boundaries:** This is a loopback-only POC. Revocation and policy configuration must be supplied from approved NASA PKI sources. Do not expose to the internet or treat successful certificate authentication as authorization. Use approved identity governance, CSRF protection, operational monitoring, rate limits, audited configuration, resilient session storage, TLS verification, and a formal security review before production use.
