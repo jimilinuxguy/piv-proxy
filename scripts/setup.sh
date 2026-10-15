@@ -5,26 +5,64 @@ command -v docker >/dev/null || { echo 'Install Docker Desktop first'; exit 1; }
 command -v openssl >/dev/null || { echo 'OpenSSL required'; exit 1; }
 command -v python3 >/dev/null || { echo 'Python 3 required'; exit 1; }
 mkdir -p pki tls
-# A missing bind-mount source can appear as a confusing nginx startup error.
 if [ ! -f nginx/default.conf ]; then
   echo 'ERROR: nginx/default.conf missing. Run setup from a complete repository checkout.' >&2
   exit 1
 fi
+new_env=false
 if [ ! -f .env ]; then
   cp .env.example .env
-  echo 'Created .env using strict PIV defaults.'
+  new_env=true
+  echo 'Created generic .env configuration.'
 fi
-bash scripts/fetch-nasa-piv-cas.sh
-# Refresh with the cryptography dependency from the app image, without requiring host pip.
-docker compose build app
-# Use the configured CRL distribution endpoint; do not evaluate .env as shell code.
-CRL_URL="${PIV_CRL_URL:-$(sed -n 's/^PIV_CRL_URL=//p' .env | tail -1)}"
-CRL_URL="${CRL_URL:-http://hc.nasa.gov/combinedCRL5.crl}"
-docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" \
-  -v "$PWD/pki:/crl-output:rw" \
-  -e PIV_CRL_URL="$CRL_URL" \
-  --user 0 app python /scripts/update-crl.py --issuer /app/pki/nasa-operational.pem \
-  --output /crl-output/nasa-leaf.crl
+printf 'Download and configure NASA PIV certificates and CRL as a sample? [y/N] '
+if [ -t 0 ]; then
+  read -r answer || answer=""
+else
+  answer=""
+  printf '\nNoninteractive setup: skipping optional NASA sample.\n'
+fi
+case "$answer" in
+  y|Y|yes|YES|Yes)
+    bash scripts/fetch-nasa-piv-cas.sh
+    docker compose build app
+    CRL_URL="${PIV_CRL_URL:-http://hc.nasa.gov/combinedCRL5.crl}"
+    docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" \
+      -v "$PWD/pki:/crl-output:rw" -e PIV_CRL_URL="$CRL_URL" \
+      --user 0 app python /scripts/update-crl.py \
+      --issuer /app/pki/nasa-operational.pem --output /crl-output/nasa-leaf.crl
+    if [ "$new_env" = true ]; then
+      cat >> .env <<'EOF'
+
+# Optional NASA sample profile selected during setup
+REQUIRED_POLICY_OIDS=2.16.840.1.101.3.2.1.3.13
+PIV_ISSUER_PATH=/app/pki/nasa-operational.pem
+PIV_CRL_PATH=/app/pki/nasa-leaf.crl
+PIV_CRL_URL=http://hc.nasa.gov/combinedCRL5.crl
+EOF
+    else
+      echo 'Existing .env preserved. Ensure its issuer, CRL and policy settings match the NASA sample.'
+    fi
+    ;;
+  *)
+    echo 'Skipping NASA sample; using your configured CA trust and CRLs.'
+    ;;
+esac
+# Fail before launching a misleading or nonfunctional gateway.
+if [ ! -s pki/client-ca.pem ]; then
+  echo 'ERROR: Missing pki/client-ca.pem. Supply your trusted CA chain or choose the NASA sample.' >&2
+  exit 1
+fi
+ISSUER_FILE="$(sed -n 's/^PIV_ISSUER_PATH=//p' .env | tail -1)"
+ISSUER_FILE="${ISSUER_FILE:-/app/pki/issuer.pem}"
+case "$ISSUER_FILE" in
+  /app/pki/*) ISSUER_HOST="pki/${ISSUER_FILE#/app/pki/}" ;;
+  *) echo 'ERROR: PIV_ISSUER_PATH must point inside /app/pki.' >&2; exit 1 ;;
+esac
+if [ ! -s "$ISSUER_HOST" ]; then
+  echo "ERROR: Missing issuer bundle $ISSUER_HOST. Configure .env and provision issuer certificates." >&2
+  exit 1
+fi
 if [ ! -f tls/localhost.crt ] || [ ! -f tls/localhost.key ]; then
   openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
     -keyout tls/localhost.key -out tls/localhost.crt \
@@ -32,6 +70,5 @@ if [ ! -f tls/localhost.crt ] || [ ! -f tls/localhost.key ]; then
   chmod 600 tls/localhost.key
 fi
 docker compose up -d --build
-echo 'Open https://localhost:8443 then click Authenticate (port 8444).'
-echo 'Strict PIV policy and revocation validation are enabled by default.'
-echo 'The local HTTPS certificate is self-signed; your browser will warn until trusted.'
+echo 'Open https://localhost:8443 and authenticate with your configured CAC/PIV credential.'
+echo 'Strict certificate policy and revocation validation are enabled by default.'
