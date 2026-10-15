@@ -21,6 +21,8 @@ class MultiIssuerTests(unittest.TestCase):
         now = dt.datetime.now(dt.timezone.utc)
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
+            crl_dir = directory / "crls"
+            crl_dir.mkdir()
             issuer_pems = []
             leafs = []
             for label, revoked in (("Agency A", False), ("Agency B", True)):
@@ -50,11 +52,11 @@ class MultiIssuerTests(unittest.TestCase):
                     builder = builder.add_revoked_certificate(
                         x509.RevokedCertificateBuilder().serial_number(1234)
                         .revocation_date(now - dt.timedelta(hours=2)).build())
-                (directory / (label.replace(" ", "-") + ".crl")).write_bytes(
+                (crl_dir / (label.replace(" ", "-") + ".crl")).write_bytes(
                     builder.sign(key, hashes.SHA256()).public_bytes(serialization.Encoding.DER))
             bundle = directory / "issuers.pem"
             bundle.write_bytes(b"".join(issuer_pems))
-            with patch.object(server, "ISSUER_PATH", bundle), patch.object(server, "CRL_DIRECTORY", directory):
+            with patch.object(server, "ISSUER_PATH", bundle), patch.object(server, "CRL_DIRECTORY", crl_dir):
                 server.check_revocation(leafs[0], now)
                 with self.assertRaisesRegex(ValueError, "revoked"):
                     server.check_revocation(leafs[1], now)
