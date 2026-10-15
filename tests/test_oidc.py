@@ -57,6 +57,8 @@ class OIDCTests(unittest.TestCase):
         bad = dict(form, code_verifier=["B"*43])
         with self.assertRaises(ValueError):
             oidc.exchange_code(self.store, bad)
+        result = oidc.exchange_code(self.store, form)
+        self.assertIn("id_token", result)
         with self.assertRaises(ValueError):
             oidc.exchange_code(self.store, form)
     def test_signed_id_token(self):
