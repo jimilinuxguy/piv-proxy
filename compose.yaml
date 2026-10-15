@@ -21,6 +21,7 @@ services:
       PIV_CALLBACK_ALLOWED_ORIGINS: ${PIV_CALLBACK_ALLOWED_ORIGINS:-https://localhost:8443}
       OIDC_ENABLED: ${OIDC_ENABLED:-false}
       OIDC_ISSUER: ${OIDC_ISSUER:-https://localhost:8443}
+      PIV_PUBLIC_ORIGIN: ${PIV_PUBLIC_ORIGIN:-https://localhost:8443}
       PIV_MTLS_ORIGIN: ${PIV_MTLS_ORIGIN:-https://localhost:8444}
       PIV_DEFAULT_RETURN_URL: ${PIV_DEFAULT_RETURN_URL:-https://localhost:8443/app/}
       PIV_SUBJECT_MAP_JSON: ${PIV_SUBJECT_MAP_JSON:-{}}
