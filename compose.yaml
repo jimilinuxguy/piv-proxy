@@ -17,6 +17,10 @@ services:
     environment:
       REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-}
       REDIS_URL: redis://redis:6379/0\n      PIV_CALLBACK_ALLOWED_ORIGINS: ${PIV_CALLBACK_ALLOWED_ORIGINS:-https://localhost:8443}
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENTS_JSON: ${OIDC_CLIENTS_JSON:-{}}
+      OIDC_SIGNING_KEY_PATH: /app/oidc/private.pem
       PIV_VALIDATION_API_KEY: ${PIV_VALIDATION_API_KEY:-}
       PIV_STRICT: ${PIV_STRICT:-true}
       PIV_CRL_PATH: ${PIV_CRL_PATH:-/app/pki/issuer.crl}
@@ -24,6 +28,7 @@ services:
       PIV_CRL_DIRECTORY: ${PIV_CRL_DIRECTORY:-/app/pki/crls}
     volumes:
       - ./pki:/app/pki:ro
+      - ./oidc:/app/oidc:ro
     depends_on: [redis]
     expose: ["8000"]
     restart: unless-stopped
