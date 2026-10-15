@@ -196,7 +196,7 @@ def exchange_code(store, form):
     code = form["code"][0]
     if len(code) > 256:
         raise ValueError("Invalid code")
-    raw = store.getdel("oidc-code:" + code)
+    raw = store.get("oidc-code:" + code)
     if not raw:
         raise ValueError("Invalid or expired code")
     data = json.loads(raw)
@@ -208,6 +208,8 @@ def exchange_code(store, form):
         raise ValueError("Invalid PKCE verifier")
     if not secrets.compare_digest(b64(hashlib.sha256(verifier.encode()).digest()), req["code_challenge"]):
         raise ValueError("PKCE mismatch")
+    if not store.getdel("oidc-code:" + code):
+        raise ValueError("Authorization code already used")
     now = int(time.time())
     claims = data["claims"]
     subject = claims["subject_id"]
