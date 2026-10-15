@@ -78,7 +78,7 @@ class Handler(BaseHTTPRequestHandler):
             state, nonce, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(32), secrets.token_urlsafe(48)
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
             PENDING[state] = {"nonce":nonce, "verifier":verifier, "expires":now+300}
-            query = {"response_type":"code", "scope":"openid", "client_id":CLIENT, "redirect_uri":CALLBACK,
+            query = {"response_type":"code", "scope":"openid profile", "client_id":CLIENT, "redirect_uri":CALLBACK,
                      "state":state, "nonce":nonce, "code_challenge":challenge, "code_challenge_method":"S256"}
             return self.respond(303, location=ISSUER + "/authorize?" + urlencode(query))
         if path == "/callback":
