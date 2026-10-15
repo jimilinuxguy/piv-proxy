@@ -158,6 +158,42 @@ The receiving application must map the returned **`subject_id`** to an authorize
 
 **Security boundaries:** The bearer key authenticates the calling service, not the end user. Keep it secret and rotate it if exposed. Restrict Docker network membership; any application holding both a valid cookie and key can introspect that session. Use TLS/mTLS if validation traverses hosts or untrusted networks. Do not publish this endpoint to the internet. Validate the session on each protected request or carefully constrain any local session lifetime; logout/revocation will not invalidate independent downstream sessions automatically.
 
+## Optional OIDC for applications hosted on other domains
+
+The OIDC authorization-code + PKCE flow is **opt-in**, and does not rely on cross-domain cookies. The current gateway's PIV cookie remains on the authentication host. Remote applications obtain a signed RS256 ID token after a one-time authorization-code exchange and create their own sessions.
+
+1. Generate a **local** RSA key (never commit it):
+
+```bash
+mkdir -p oidc
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out oidc/private.pem
+chmod 600 oidc/private.pem
+```
+
+2. Add to `.env` (register every exact HTTPS callback URI):
+
+```dotenv
+OIDC_ENABLED=true
+OIDC_ISSUER=https://localhost:8443
+OIDC_CLIENTS_JSON={"remote-demo":["https://localhost:3000/oidc/callback"]}
+```
+
+3. Restart `docker compose up -d --build --force-recreate`. The issuer and JWKS endpoints are `https://localhost:8443/.well-known/openid-configuration` and `https://localhost:8443/jwks.json`.
+
+4. Your remote application creates a cryptographically random `state`, `nonce`, and PKCE `code_verifier` (43–128 permitted characters); store these in its **server-side login session**. Send the browser to:
+
+```text
+https://localhost:8443/authorize?response_type=code&scope=openid&client_id=remote-demo&redirect_uri=https%3A%2F%2Flocalhost%3A3000%2Foidc%2Fcallback&state=RANDOM_STATE&nonce=RANDOM_NONCE&code_challenge=BASE64URL_SHA256_VERIFIER&code_challenge_method=S256
+```
+
+5. The proxy redirects to the smart-card mTLS port `8444`, validates CAC/PIV, sets its own session cookie, and redirects the browser to the **registered** callback with `code` and original `state`. Your application verifies `state`, then POSTs to `https://localhost:8443/token` as `application/x-www-form-urlencoded` with `grant_type=authorization_code`, `client_id`, `redirect_uri`, `code`, and the original `code_verifier`.
+
+6. Verify the returned `id_token` RS256 signature against the published JWKS, **issuer**, **audience/client ID**, expiration, and **nonce** before accepting its `sub` (certificate fingerprint) as the mapped account identifier. Use `access_token` as a bearer credential with `GET /userinfo` if desired. Never trust the browser's callback `code` or any decoded token claims without validation.
+
+The code expires in 60 seconds and can be redeemed once; ID and access tokens expire in 5 minutes. Only pre-registered HTTPS redirects are accepted. The `/token`, `/userinfo`, JWKS, discovery, and authorization endpoints are reachable over the configured HTTPS gateway. The older `/api/v1/session/validate` remains **private** to the Docker network.
+
+**Limitations:** This is a development-grade OIDC bridge, **not a certified or production-ready identity provider**. It supports public clients using PKCE S256 only, with one static signing key and no refresh tokens, dynamic registration, discovery-based key rotation, consent management, end-session federation, or cross-system logout. Certificate fingerprints change at renewal. To host applications on other machines, deploy under a real DNS name with trusted HTTPS certificates, carefully protect the signing key, and complete an identity-provider security review.
+
 ## Testing
 
 ```bash
