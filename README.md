@@ -194,6 +194,37 @@ The code expires in 60 seconds and can be redeemed once; ID and access tokens ex
 
 **Limitations:** This is a development-grade OIDC bridge, **not a certified or production-ready identity provider**. It supports public clients using PKCE S256 only, with one static signing key and no refresh tokens, dynamic registration, discovery-based key rotation, consent management, end-session federation, or cross-system logout. Certificate fingerprints change at renewal. To host applications on other machines, deploy under a real DNS name with trusted HTTPS certificates, carefully protect the signing key, and complete an identity-provider security review.
 
+## Complete local OIDC demo application
+
+The standalone example is at **https://localhost:8445/**. Unlike the legacy `/app/` reverse-proxy example, it initiates its own OIDC authorization-code + PKCE login, exchanges the code on the backend, validates the RS256 ID-token signature against the issuer's JWKS, checks issuer/audience/nonce/expiry, and establishes its own Secure, HttpOnly application cookie. The demo does **not** trust `X-Authenticated-User` headers.
+
+To run the complete proof of concept, first complete CAC/PIV issuer and CRL setup described above. Generate the OIDC signing key:
+
+```bash
+mkdir -p oidc
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out oidc/private.pem
+chmod 600 oidc/private.pem
+```
+
+Set these values in `.env`:
+
+```dotenv
+OIDC_ENABLED=true
+OIDC_ISSUER=https://localhost:8443
+OIDC_CLIENTS_JSON={"piv-demo":["https://localhost:8445/callback"]}
+```
+
+Then:
+
+```bash
+docker compose up -d --build --force-recreate
+bash scripts/run-unit-tests.sh
+```
+
+Open **https://localhost:8445/** and select **Sign in with CAC/PIV**. The browser goes to the authorization endpoint, authenticates on port 8444, and returns to the demo callback on port 8445. The demo's backend uses Docker's private `app:8000` service for token/JWKS retrieval; a remote deployment should use a trusted HTTPS issuer URL instead. The demo stores login attempts and application sessions **in memory** and is not horizontally scalable or production-ready. It is intentionally bound to loopback through NGINX.
+
+The old `/app/` example is a reverse-proxy demonstration, **not** an independent OIDC client. Use port 8445 to demonstrate the complete remote-application pattern.
+
 ## Testing
 
 ```bash
