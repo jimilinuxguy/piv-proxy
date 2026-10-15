@@ -99,6 +99,65 @@ After certificate validation, the gateway sets the existing `piv_proxy_session` 
 
 **Security:** External callbacks require explicit allowlisting; arbitrary redirect URLs, HTTP callbacks, userinfo and fragments are rejected. The destination application still must validate the proxy session through a trusted server-side integration; merely receiving the cookie does not log the user into its own account. Do not expose this local proof of concept publicly.
 
+## Server-to-server session validation API
+
+The authentication service provides **`GET /api/v1/session/validate`** on its internal Docker network at `http://app:8000/api/v1/session/validate`. This endpoint is **not published through NGINX** or bound to a host port. The calling application must join the same trusted Docker network or use an appropriately protected private service connection.
+
+Set a high-entropy shared secret in `.env`:
+
+```bash
+openssl rand -hex 32
+```
+
+```dotenv
+PIV_VALIDATION_API_KEY=<paste-generated-secret>
+```
+
+Restart with `docker compose up -d --build --force-recreate`. Configure the same key securely on the receiving application's **backend**, never in browser JavaScript. If the key is unset, validation always returns 403.
+
+The receiving backend forwards the browser's `piv_proxy_session` cookie and authenticates itself:
+
+```http
+GET /api/v1/session/validate HTTP/1.1
+Host: app:8000
+Authorization: Bearer <shared-secret>
+Cookie: piv_proxy_session=<browser-cookie>
+```
+
+Successful response (`200`):
+
+```json
+{"authenticated":true,"identity":"Example User","auth_method":"piv","expires_in":742}
+```
+
+Other responses: `401` means missing/invalid/expired session; `403` means invalid or missing API key (or the API is disabled); `503` means Redis is unavailable. All responses use `Cache-Control: no-store`.
+
+Example Python backend integration:
+
+```python
+import os
+import requests
+from flask import request, abort
+
+def validated_piv_identity():
+    token = request.cookies.get("piv_proxy_session")
+    if not token:
+        abort(401)
+    response = requests.get(
+        "http://app:8000/api/v1/session/validate",
+        headers={"Authorization": "Bearer " + os.environ["PIV_VALIDATION_API_KEY"]},
+        cookies={"piv_proxy_session": token},
+        timeout=3,
+    )
+    if response.status_code != 200:
+        abort(503 if response.status_code == 503 else 401)
+    return response.json()["identity"]
+```
+
+The receiving application must map the returned identity to an **authorized** local account and establish its normal session; this does not automatically bypass a third-party login form. The current identity is the certificate common name, **not a guaranteed unique account identifier**. For account mapping, extend the identity claim to a stable, organization-approved identifier before production use.
+
+**Security boundaries:** The bearer key authenticates the calling service, not the end user. Keep it secret and rotate it if exposed. Restrict Docker network membership; any application holding both a valid cookie and key can introspect that session. Use TLS/mTLS if validation traverses hosts or untrusted networks. Do not publish this endpoint to the internet. Validate the session on each protected request or carefully constrain any local session lifetime; logout/revocation will not invalidate independent downstream sessions automatically.
+
 ## Testing
 
 ```bash
