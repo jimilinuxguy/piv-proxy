@@ -11,14 +11,16 @@ services:
     depends_on: [app, demo]
     restart: unless-stopped
   app:
-    build: ./app
+    build:
+      context: .
+      dockerfile: app/Dockerfile
     environment:
-      NASA_ISSUER: NASA Operational CA
       REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-}
       REDIS_URL: redis://redis:6379/0
-      PIV_STRICT: ${PIV_STRICT:-false}
-      PIV_CRL_PATH: /app/pki/nasa-leaf.crl
-      PIV_ISSUER_PATH: /app/pki/nasa-operational.pem
+      PIV_STRICT: ${PIV_STRICT:-true}
+      PIV_CRL_PATH: ${PIV_CRL_PATH:-/app/pki/issuer.crl}
+      PIV_ISSUER_PATH: ${PIV_ISSUER_PATH:-/app/pki/issuer.pem}
+      PIV_CRL_DIRECTORY: ${PIV_CRL_DIRECTORY:-/app/pki/crls}
     volumes:
       - ./pki:/app/pki:ro
     depends_on: [redis]

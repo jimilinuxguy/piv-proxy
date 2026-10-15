@@ -1,6 +1,7 @@
 FROM python:3.12-alpine
-RUN pip install --no-cache-dir cryptography==44.0.3 redis==5.2.1
 WORKDIR /app
-COPY server.py .
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY app/server.py /app/server.py
 USER 10001
 CMD ["python", "server.py"]

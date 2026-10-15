@@ -1,4 +1,4 @@
-"""Local-only NASA PIV mTLS session gateway. Not production authorization."""
+"""Local-only configurable PIV mTLS session gateway. Not production authorization."""
 import datetime
 import html
 import os
@@ -17,6 +17,7 @@ COOKIE_NAME = "piv_proxy_session"
 STRICT = os.getenv("PIV_STRICT", "false").lower() == "true"
 CRL_PATH = Path(os.getenv("PIV_CRL_PATH", "/app/pki/nasa-leaf.crl"))
 ISSUER_PATH = Path(os.getenv("PIV_ISSUER_PATH", "/app/pki/nasa-operational.pem"))
+CRL_DIRECTORY = Path(os.getenv("PIV_CRL_DIRECTORY", "/app/pki/crls"))
 STORE = redis.Redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
 
 
@@ -26,57 +27,59 @@ def load_pem_certificates(data):
         rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", data, re.S)]
 
 def check_revocation(cert, now):
-    """Fail closed on missing, invalid, stale, or nonmatching issuer CRLs."""
+    """Fail closed unless a current, correctly signed issuer CRL covers the certificate."""
     try:
-        crl_bytes = CRL_PATH.read_bytes()
-        issuer_certs = load_pem_certificates(ISSUER_PATH.read_bytes())
-        crl = (x509.load_pem_x509_crl(crl_bytes) if b"-----BEGIN X509 CRL-----" in crl_bytes
-               else x509.load_der_x509_crl(crl_bytes))
+        issuers = load_pem_certificates(ISSUER_PATH.read_bytes())
+        paths = (sorted(p for p in CRL_DIRECTORY.iterdir() if p.is_file() and
+                        p.suffix.lower() in (".crl", ".der"))
+                 if CRL_DIRECTORY.is_dir() else [CRL_PATH])
+        crls = []
+        for path in paths:
+            data = path.read_bytes()
+            crls.append(x509.load_pem_x509_crl(data) if b"-----BEGIN X509 CRL-----" in data
+                        else x509.load_der_x509_crl(data))
     except (OSError, ValueError) as exc:
         raise ValueError("Revocation data unavailable or invalid") from exc
-    if crl.next_update_utc is None or not (crl.last_update_utc <= now < crl.next_update_utc):
-        raise ValueError("Revocation list is stale or not yet valid")
-    # Delta and indirect CRLs require additional processing; never silently treat them as complete.
-    try:
-        crl.extensions.get_extension_for_class(x509.DeltaCRLIndicator)
-        raise ValueError("Delta CRL is not supported; provide a complete base CRL")
-    except x509.ExtensionNotFound:
-        pass
-    try:
-        idp = crl.extensions.get_extension_for_class(x509.IssuingDistributionPoint).value
-        if idp.indirect_crl or idp.only_some_reasons or idp.only_contains_attribute_certs:
-            raise ValueError("Restricted or indirect CRL is not supported")
-    except x509.ExtensionNotFound:
-        pass
-    candidates = [issuer for issuer in issuer_certs
-                  if issuer.subject == cert.issuer and issuer.subject == crl.issuer]
-    for issuer in candidates:
+    candidates = [issuer for issuer in issuers if issuer.subject == cert.issuer]
+    if not candidates:
+        raise ValueError("Certificate issuer is not in the configured issuer bundle")
+    for crl in crls:
+        if crl.issuer != cert.issuer:
+            continue
+        if crl.next_update_utc is None or not (crl.last_update_utc <= now < crl.next_update_utc):
+            continue
         try:
-            if not crl.is_signature_valid(issuer.public_key()):
+            crl.extensions.get_extension_for_class(x509.DeltaCRLIndicator)
+            continue
+        except x509.ExtensionNotFound:
+            pass
+        try:
+            idp = crl.extensions.get_extension_for_class(x509.IssuingDistributionPoint).value
+            if (idp.indirect_crl or idp.only_some_reasons or
+                    idp.only_contains_attribute_certs or idp.only_contains_ca_certs):
                 continue
-            # Match Authority Key Identifier to avoid using a different issuer key.
+        except x509.ExtensionNotFound:
+            pass
+        for issuer in candidates:
             try:
-                cert_aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+                usage = issuer.extensions.get_extension_for_class(x509.KeyUsage).value
+                if not usage.crl_sign:
+                    continue
                 issuer_ski = issuer.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+                cert_aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
                 if cert_aki.key_identifier and cert_aki.key_identifier != issuer_ski.digest:
                     continue
-            except x509.ExtensionNotFound:
-                pass
-            try:
                 crl_aki = crl.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
-                issuer_ski = issuer.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
                 if crl_aki.key_identifier and crl_aki.key_identifier != issuer_ski.digest:
                     continue
             except x509.ExtensionNotFound:
                 pass
+            if not crl.is_signature_valid(issuer.public_key()):
+                continue
             if crl.get_revoked_certificate_by_serial_number(cert.serial_number):
                 raise ValueError("PIV certificate is revoked")
             return
-        except ValueError as exc:
-            if str(exc) == "PIV certificate is revoked":
-                raise
-            continue
-    raise ValueError("No valid issuer signature for PIV revocation list")
+    raise ValueError("No current, valid issuer CRL for PIV certificate")
 
 def validate_piv(encoded):
     cert = x509.load_pem_x509_certificate(unquote(encoded).encode("ascii"))
@@ -86,9 +89,12 @@ def validate_piv(encoded):
     eku = cert.extensions.get_extension_for_oid(ExtensionOID.EXTENDED_KEY_USAGE).value
     if ExtendedKeyUsageOID.CLIENT_AUTH not in eku:
         raise ValueError("Certificate does not permit TLS client authentication")
-    nasa_issuer = os.getenv("NASA_ISSUER", "NASA Operational CA")
-    if not any(a.value == nasa_issuer for a in cert.issuer):
-        raise ValueError("Certificate issuer is not NASA Operational CA")
+    try:
+        issuers = load_pem_certificates(ISSUER_PATH.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise ValueError("Configured issuer bundle unavailable") from exc
+    if not any(issuer.subject == cert.issuer for issuer in issuers):
+        raise ValueError("Certificate issuer is not in the configured issuer bundle")
     required = {x.strip() for x in os.getenv("REQUIRED_POLICY_OIDS", "").split(",") if x.strip()}
     if STRICT and not required:
         raise ValueError("Strict mode requires approved PIV policy OIDs")
