@@ -16,7 +16,7 @@ services:
       dockerfile: app/Dockerfile
     environment:
       REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379/0\n      PIV_CALLBACK_ALLOWED_ORIGINS: ${PIV_CALLBACK_ALLOWED_ORIGINS:-https://localhost:8443}
       PIV_STRICT: ${PIV_STRICT:-true}
       PIV_CRL_PATH: ${PIV_CRL_PATH:-/app/pki/issuer.crl}
       PIV_ISSUER_PATH: ${PIV_ISSUER_PATH:-/app/pki/issuer.pem}
