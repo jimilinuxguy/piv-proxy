@@ -128,7 +128,7 @@ def main():
     print('Wrote certificates to:', OUT)
     print('\nIMPORTANT: A successful CA-chain check is not sufficient for production PIV')
     print('authentication. Enforce client-auth EKU, approved PIV policies, revocation,')
-    print('and NASA-specific authorization in the authentication service.')
+    print('and organization-specific authorization in the authentication service.')
 
 
 if __name__ == '__main__':
