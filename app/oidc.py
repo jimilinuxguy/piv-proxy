@@ -14,10 +14,48 @@ def b64(data):
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 def decode_clients():
+    """Allow legacy redirect arrays or structured, explicitly registered clients."""
     clients = json.loads(os.getenv("OIDC_CLIENTS_JSON", "{}"))
     if not isinstance(clients, dict):
         raise ValueError("Invalid OIDC client configuration")
-    return clients
+    normalized = {}
+    for client_id, config in clients.items():
+        if isinstance(config, list):
+            config = {"redirect_uris": config, "scopes": ["openid", "profile"], "token_endpoint_auth_method": "none"}
+        if not isinstance(config, dict) or not isinstance(config.get("redirect_uris"), list):
+            raise ValueError("Invalid OIDC client configuration")
+        method = config.get("token_endpoint_auth_method", "none")
+        if method not in ("none", "client_secret_post"):
+            raise ValueError("Unsupported client authentication method")
+        if method == "client_secret_post" and not config.get("client_secret"):
+            raise ValueError("Confidential client requires a secret")
+        normalized[client_id] = config
+    return normalized
+
+def login_origin():
+    return os.getenv("PIV_MTLS_ORIGIN", "https://localhost:8444").rstrip("/")
+
+def persistent_subject(fingerprint):
+    """Optional administrator-provisioned certificate-to-person mapping.
+    Unmapped certificates retain per-certificate subject IDs; never infer identity from CN.
+    """
+    mapping = json.loads(os.getenv("PIV_SUBJECT_MAP_JSON", "{}"))
+    if not isinstance(mapping, dict):
+        raise ValueError("Invalid subject mapping")
+    value = mapping.get(fingerprint)
+    if value is None:
+        return "sha256:" + fingerprint
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise ValueError("Invalid mapped subject")
+    return value
+
+def client_auth(config, form):
+    method = config.get("token_endpoint_auth_method", "none")
+    secret = form.get("client_secret", [])
+    if method == "none":
+        return not secret
+    return len(secret) == 1 and secrets.compare_digest(secret[0], config["client_secret"])
+
 
 def issuer():
     value = os.getenv("OIDC_ISSUER", "").rstrip("/")
@@ -55,7 +93,8 @@ def discovery():
             "userinfo_endpoint": base + "/userinfo",
             "response_types_supported": ["code"], "grant_types_supported": ["authorization_code"],
             "subject_types_supported": ["public"], "id_token_signing_alg_values_supported": ["RS256"],
-            "scopes_supported": ["openid"], "token_endpoint_auth_methods_supported": ["none"],
+            "scopes_supported": ["openid", "profile"], "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+            "end_session_endpoint": base + "/oidc/logout",
             "code_challenge_methods_supported": ["S256"]}
 
 def check_authorize(params):
@@ -69,18 +108,21 @@ def check_authorize(params):
     if len(params.get("client_id", [])) != 1 or len(params.get("redirect_uri", [])) != 1:
         raise ValueError("Invalid client parameters")
     if (urlsplit(redirect).scheme != "https" or not urlsplit(redirect).netloc or
-            urlsplit(redirect).fragment or cid not in clients or redirect not in clients[cid]):
+            urlsplit(redirect).fragment or cid not in clients or redirect not in clients[cid]["redirect_uris"]):
         raise ValueError("Unregistered client or redirect URI")
     for name in ("state", "nonce", "code_challenge", "code_challenge_method", "response_type", "scope"):
         if len(params.get(name, [])) != 1:
             raise ValueError("Missing or duplicate " + name)
+    scopes = params["scope"][0].split()
+    if not set(scopes).issubset(set(clients[cid].get("scopes", ["openid", "profile"]))):
+        raise ValueError("Scope not allowed")
     challenge = params["code_challenge"][0]
     if (params["response_type"][0] != "code" or "openid" not in params["scope"][0].split()
             or params["code_challenge_method"][0] != "S256" or len(challenge) != 43
             or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in challenge)
             or not params["state"][0] or not params["nonce"][0]):
         raise ValueError("Invalid OIDC authorization parameters")
-    return {name: params[name][0] for name in ("client_id", "redirect_uri", "state", "nonce", "code_challenge")}
+    return {name: params[name][0] for name in ("client_id", "redirect_uri", "state", "nonce", "code_challenge", "scope")}
 
 def create_request(store, params):
     data = check_authorize(params)
@@ -96,7 +138,7 @@ def authorize_from_session(store, request_id, cookie_token):
         raise ValueError("Authorization request expired")
     data = json.loads(raw)
     check_authorize({**{k:[v] for k,v in data.items()},
-                     "code_challenge_method":["S256"], "response_type":["code"], "scope":["openid"]})
+                     "code_challenge_method":["S256"], "response_type":["code"]})
     session_raw = store.get("session:" + cookie_token)
     if not session_raw:
         raise ValueError("Session expired")
@@ -118,6 +160,10 @@ def exchange_code(store, form):
     for name in ("grant_type", "code", "client_id", "redirect_uri", "code_verifier"):
         if len(form.get(name, [])) != 1:
             raise ValueError("Missing or duplicate " + name)
+    clients = decode_clients()
+    config = clients.get(form["client_id"][0])
+    if not config or not client_auth(config, form):
+        raise ValueError("Client authentication failed")
     if form["grant_type"][0] != "authorization_code":
         raise ValueError("Unsupported grant")
     code = form["code"][0]
@@ -137,11 +183,20 @@ def exchange_code(store, form):
         raise ValueError("PKCE mismatch")
     now = int(time.time())
     claims = data["claims"]
-    token = jwt({"iss":issuer(), "sub":claims["subject_id"], "aud":req["client_id"],
+    subject = claims["subject_id"]
+    scopes = req.get("scope", "openid").split()
+    token_claims = {"iss":issuer(), "sub":subject, "aud":req["client_id"],
                  "iat":now, "exp":now+300, "auth_time":data["auth_time"],
-                 "nonce":req["nonce"], "name":claims["identity"], "amr":["piv"]})
+                 "nonce":req["nonce"], "amr":["piv"]}
+    if "profile" in scopes:
+        token_claims["name"] = claims["identity"]
+        token_claims["preferred_username"] = claims["identity"]
+    token = jwt(token_claims)
     access = secrets.token_urlsafe(32)
-    store.setex("oidc-access:" + access, 300, json.dumps({"sub":claims["subject_id"], "name":claims["identity"]}))
+    user_claims = {"sub": subject}
+    if "profile" in scopes:
+        user_claims.update({"name": claims["identity"], "preferred_username": claims["identity"]})
+    store.setex("oidc-access:" + access, 300, json.dumps(user_claims))
     return {"access_token":access, "token_type":"Bearer", "expires_in":300, "id_token":token}
 
 def userinfo(store, authorization):
