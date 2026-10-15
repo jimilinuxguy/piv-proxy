@@ -120,7 +120,7 @@ def callback_url(request_path):
     if len(values) != 1:
         raise ValueError("Invalid callback URL")
     target = values[0]
-    if not target or any(ord(c) < 32 or ord(c) == 127 for c in target) or "\\\\" in target:
+    if not target or any(ord(c) < 32 or ord(c) == 127 for c in target) or chr(92) in target:
         raise ValueError("Invalid callback URL")
     parsed = urlsplit(target)
     if parsed.fragment or parsed.username or parsed.password:
