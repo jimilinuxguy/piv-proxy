@@ -68,7 +68,8 @@ def check_authorize(params):
     redirect = params.get("redirect_uri", [""])[0]
     if len(params.get("client_id", [])) != 1 or len(params.get("redirect_uri", [])) != 1:
         raise ValueError("Invalid client parameters")
-    if cid not in clients or redirect not in clients[cid]:
+    if (urlsplit(redirect).scheme != "https" or not urlsplit(redirect).netloc or
+            urlsplit(redirect).fragment or cid not in clients or redirect not in clients[cid]):
         raise ValueError("Unregistered client or redirect URI")
     for name in ("state", "nonce", "code_challenge", "code_challenge_method", "response_type", "scope"):
         if len(params.get(name, [])) != 1:
