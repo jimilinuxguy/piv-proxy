@@ -9,10 +9,8 @@ if [ ! -f nginx/default.conf ]; then
   echo 'ERROR: nginx/default.conf missing. Run setup from a complete repository checkout.' >&2
   exit 1
 fi
-new_env=false
 if [ ! -f .env ]; then
   cp .env.example .env
-  new_env=true
   echo 'Created generic .env configuration.'
 fi
 printf 'Download and configure NASA PIV certificates and CRL as a sample? [y/N] '
@@ -31,18 +29,33 @@ case "$answer" in
       -v "$PWD/pki:/crl-output:rw" -e PIV_CRL_URL="$CRL_URL" \
       --user 0 app python /scripts/update-crl.py \
       --issuer /app/pki/nasa-operational.pem --output /crl-output/nasa-leaf.crl
-    if [ "$new_env" = true ]; then
-      cat >> .env <<'EOF'
-
-# Optional NASA sample profile selected during setup
-REQUIRED_POLICY_OIDS=2.16.840.1.101.3.2.1.3.13
-PIV_ISSUER_PATH=/app/pki/nasa-operational.pem
-PIV_CRL_PATH=/app/pki/nasa-leaf.crl
-PIV_CRL_URL=http://hc.nasa.gov/combinedCRL5.crl
-EOF
-    else
-      echo 'Existing .env preserved. Ensure its issuer, CRL and policy settings match the NASA sample.'
-    fi
+    # Update only the sample profile keys, retaining unrelated user settings.
+    python3 - <<'PY'
+from pathlib import Path
+path = Path(".env")
+updates = {
+    "REQUIRED_POLICY_OIDS": "2.16.840.1.101.3.2.1.3.13",
+    "PIV_ISSUER_PATH": "/app/pki/nasa-operational.pem",
+    "PIV_CRL_PATH": "/app/pki/nasa-leaf.crl",
+    "PIV_CRL_URL": "http://hc.nasa.gov/combinedCRL5.crl",
+}
+lines = path.read_text().splitlines()
+seen = set()
+result = []
+for line in lines:
+    key = line.split("=", 1)[0].strip()
+    if key in updates:
+        if key not in seen:
+            result.append(f"{key}={updates[key]}")
+            seen.add(key)
+    else:
+        result.append(line)
+for key, value in updates.items():
+    if key not in seen:
+        result.append(f"{key}={value}")
+path.write_text("\n".join(result) + "\n")
+PY
+    echo 'NASA sample settings applied to .env; unrelated settings preserved.'
     ;;
   *)
     echo 'Skipping NASA sample; using your configured CA trust and CRLs.'
