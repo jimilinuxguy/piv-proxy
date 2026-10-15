@@ -1,6 +1,8 @@
 """Local-only configurable PIV mTLS session gateway. Not production authorization."""
 import datetime
 import html
+import json
+import hmac
 import os
 import secrets
 from http import cookies
@@ -152,6 +154,24 @@ def session_identity(headers):
         return None
     return STORE.get("session:" + token)
 
+def validate_api(headers):
+    """Internal, shared-secret authenticated session introspection."""
+    expected = os.getenv("PIV_VALIDATION_API_KEY", "")
+    authorization = headers.get("Authorization", "")
+    if not expected or not hmac.compare_digest(authorization, "Bearer " + expected):
+        return 403, {"authenticated": False, "error": "forbidden"}
+    token = session_token(headers)
+    if not token or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+        return 401, {"authenticated": False}
+    identity = STORE.get("session:" + token)
+    if not identity:
+        return 401, {"authenticated": False}
+    ttl = STORE.ttl("session:" + token)
+    if ttl <= 0:
+        return 401, {"authenticated": False}
+    return 200, {"authenticated": True, "identity": identity,
+                 "auth_method": "piv", "expires_in": ttl}
+
 class Handler(BaseHTTPRequestHandler):
     def respond(self, status, body="", content_type="text/plain; charset=utf-8", headers=None):
         data = body.encode("utf-8")
@@ -167,6 +187,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
             return self.respond(200, "ok")
+        if self.path == "/api/v1/session/validate":
+            try:
+                status, result = validate_api(self.headers)
+            except redis.RedisError:
+                status, result = 503, {"authenticated": False, "error": "session_store_unavailable"}
+            return self.respond(status, json.dumps(result), "application/json; charset=utf-8")
         if self.path == "/session":
             try:
                 identity = session_identity(self.headers)
@@ -182,6 +208,7 @@ class Handler(BaseHTTPRequestHandler):
             if not encoded:
                 return self.respond(403, "PIV rejected: missing client certificate")
             try:
+                destination = callback_url(self.path)
                 identity, fingerprint = validate_piv(encoded)
                 token = secrets.token_hex(32)
                 # A new random session is issued only after NGINX verified client mTLS.
