@@ -79,6 +79,26 @@ docker compose run --rm --no-deps \
 
 Replace example URLs, hostnames and files with your organization's verified CRL endpoints. Schedule refreshes before CRLs expire. The updater also accepts `PIV_CRL_ALLOWED_HOSTS` as a comma-separated host allowlist. **A failed refresh preserves the previous CRL, but an expired CRL still fails authentication.**
 
+## Redirect to an existing application after CAC/PIV login
+
+Pass a URL-encoded `return_to` query parameter to the mTLS login endpoint:
+
+```text
+https://localhost:8444/login?return_to=https%3A%2F%2Flocalhost%3A3000%2Fdashboard
+```
+
+Allow the destination's **exact HTTPS origin** in `.env`:
+
+```dotenv
+PIV_CALLBACK_ALLOWED_ORIGINS=https://localhost:8443,https://localhost:3000
+```
+
+Then restart: `docker compose up -d --build --force-recreate`.
+
+After certificate validation, the gateway sets the existing `piv_proxy_session` cookie and responds with HTTP 303 to the approved callback. With the **same hostname** (e.g., `localhost` on two HTTPS ports), the browser sends the host-only, Secure, HttpOnly cookie to both applications; ports do not partition cookies. Different hostnames and subdomains do not receive it. A relative callback such as `/app/` is also supported. Without `return_to`, the gateway continues to `https://localhost:8443/app/`.
+
+**Security:** External callbacks require explicit allowlisting; arbitrary redirect URLs, HTTP callbacks, userinfo and fragments are rejected. The destination application still must validate the proxy session through a trusted server-side integration; merely receiving the cookie does not log the user into its own account. Do not expose this local proof of concept publicly.
+
 ## Testing
 
 ```bash
