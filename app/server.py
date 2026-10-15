@@ -152,7 +152,22 @@ def session_identity(headers):
     token = session_token(headers)
     if not token or len(token) != 64:
         return None
-    return STORE.get("session:" + token)
+    record = STORE.get("session:" + token)
+    if not record:
+        return None
+    try:
+        claims = json.loads(record)
+    except (ValueError, TypeError):
+        # Legacy sessions contain only the display name.
+        return record
+    if not isinstance(claims, dict):
+        return None
+    return claims.get("identity") if isinstance(claims.get("identity"), str) else None
+
+def session_claims(identity, fingerprint):
+    """Bind a session to the validated leaf certificate, not just its CN."""
+    return {"identity": identity, "subject_id": "sha256:" + fingerprint,
+            "certificate_sha256": fingerprint, "auth_method": "piv"}
 
 def validate_api(headers):
     """Internal, shared-secret authenticated session introspection."""
@@ -163,14 +178,26 @@ def validate_api(headers):
     token = session_token(headers)
     if not token or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
         return 401, {"authenticated": False}
-    identity = STORE.get("session:" + token)
-    if not identity:
+    record = STORE.get("session:" + token)
+    if not record:
+        return 401, {"authenticated": False}
+    try:
+        claims = json.loads(record)
+    except (ValueError, TypeError):
+        # Do not assert a stable identifier for sessions issued by old code.
+        return 401, {"authenticated": False, "error": "reauthentication_required"}
+    if (not isinstance(claims, dict) or
+            not isinstance(claims.get("identity"), str) or
+            not isinstance(claims.get("certificate_sha256"), str) or
+            len(claims["certificate_sha256"]) != 64 or
+            any(c not in "0123456789abcdef" for c in claims["certificate_sha256"]) or
+            claims.get("subject_id") != "sha256:" + claims["certificate_sha256"] or
+            claims.get("auth_method") != "piv"):
         return 401, {"authenticated": False}
     ttl = STORE.ttl("session:" + token)
     if ttl <= 0:
         return 401, {"authenticated": False}
-    return 200, {"authenticated": True, "identity": identity,
-                 "auth_method": "piv", "expires_in": ttl}
+    return 200, {"authenticated": True, **claims, "expires_in": ttl}
 
 class Handler(BaseHTTPRequestHandler):
     def respond(self, status, body="", content_type="text/plain; charset=utf-8", headers=None):
@@ -212,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
                 identity, fingerprint = validate_piv(encoded)
                 token = secrets.token_hex(32)
                 # A new random session is issued only after NGINX verified client mTLS.
-                STORE.setex("session:" + token, SESSION_TTL, identity)
+                STORE.setex("session:" + token, SESSION_TTL, json.dumps(session_claims(identity, fingerprint)))
             except (ValueError, x509.ExtensionNotFound, redis.RedisError) as exc:
                 return self.respond(403, "PIV rejected: " + str(exc))
             cookie = f"{COOKIE_NAME}={token}; Path=/; Max-Age={SESSION_TTL}; Secure; HttpOnly; SameSite=Lax"
