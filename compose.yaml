@@ -17,7 +17,8 @@ services:
       dockerfile: app/Dockerfile
     environment:
       REQUIRED_POLICY_OIDS: ${REQUIRED_POLICY_OIDS:-}
-      REDIS_URL: redis://redis:6379/0\n      PIV_CALLBACK_ALLOWED_ORIGINS: ${PIV_CALLBACK_ALLOWED_ORIGINS:-https://localhost:8443}
+      REDIS_URL: redis://redis:6379/0
+      PIV_CALLBACK_ALLOWED_ORIGINS: ${PIV_CALLBACK_ALLOWED_ORIGINS:-https://localhost:8443}
       OIDC_ENABLED: ${OIDC_ENABLED:-false}
       OIDC_ISSUER: ${OIDC_ISSUER:-https://localhost:8443}
       PIV_MTLS_ORIGIN: ${PIV_MTLS_ORIGIN:-https://localhost:8444}
@@ -25,6 +26,7 @@ services:
       PIV_SUBJECT_MAP_JSON: ${PIV_SUBJECT_MAP_JSON:-{}}
       OIDC_CLIENTS_JSON: ${OIDC_CLIENTS_JSON:-{}}
       OIDC_SIGNING_KEY_PATH: /app/oidc/private.pem
+      OIDC_PREVIOUS_PUBLIC_KEYS_DIR: /app/oidc/previous
       PIV_VALIDATION_API_KEY: ${PIV_VALIDATION_API_KEY:-}
       PIV_STRICT: ${PIV_STRICT:-true}
       PIV_CRL_PATH: ${PIV_CRL_PATH:-/app/pki/issuer.crl}
