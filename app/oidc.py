@@ -67,23 +67,50 @@ def signing_key():
     path = os.getenv("OIDC_SIGNING_KEY_PATH", "")
     if not path:
         raise ValueError("OIDC signing key not configured")
-    key = serialization.load_pem_private_key(open(path, "rb").read(), password=None)
+    with open(path, "rb") as handle:
+        key = serialization.load_pem_private_key(handle.read(), password=None)
     if not isinstance(key, rsa.RSAPrivateKey) or key.key_size < 2048:
         raise ValueError("OIDC requires RSA signing key of at least 2048 bits")
     return key
 
+def key_id(key):
+    public_der = key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return b64(hashlib.sha256(public_der).digest())
+
+def published_keys():
+    """Current signing key plus optional retained verification-only public keys."""
+    active = signing_key()
+    keys = [active.public_key()]
+    directory = os.getenv("OIDC_PREVIOUS_PUBLIC_KEYS_DIR", "")
+    if directory and os.path.isdir(directory):
+        for name in sorted(os.listdir(directory)):
+            if not name.endswith(".pem"):
+                continue
+            with open(os.path.join(directory, name), "rb") as handle:
+                previous = serialization.load_pem_public_key(handle.read())
+            if not isinstance(previous, rsa.RSAPublicKey) or previous.key_size < 2048:
+                raise ValueError("Invalid retained verification key")
+            keys.append(previous)
+    result = {}
+    for key in keys:
+        der = key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        kid = b64(hashlib.sha256(der).digest())
+        pub = key.public_numbers()
+        result[kid] = {"kty":"RSA", "use":"sig", "alg":"RS256", "kid":kid,
+                       "n":b64(pub.n.to_bytes((pub.n.bit_length()+7)//8,"big")),
+                       "e":b64(pub.e.to_bytes((pub.e.bit_length()+7)//8,"big"))}
+    return list(result.values())
+
 def jwks():
-    pub = signing_key().public_key().public_numbers()
-    size = (pub.n.bit_length() + 7) // 8
-    return {"keys": [{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "piv-oidc-1",
-                      "n": b64(pub.n.to_bytes(size, "big")),
-                      "e": b64(pub.e.to_bytes((pub.e.bit_length()+7)//8, "big"))}]}
+    return {"keys":published_keys()}
 
 def jwt(payload):
-    head = b64(json.dumps({"alg": "RS256", "typ": "JWT", "kid": "piv-oidc-1"}, separators=(",", ":")).encode())
-    body = b64(json.dumps(payload, separators=(",", ":")).encode())
+    key = signing_key()
+    head = b64(json.dumps({"alg":"RS256","typ":"JWT","kid":key_id(key)}, separators=(",",":")).encode())
+    body = b64(json.dumps(payload, separators=(",",":")).encode())
     signing_input = (head + "." + body).encode("ascii")
-    sig = signing_key().sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    sig = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
     return head + "." + body + "." + b64(sig)
 
 def discovery():
