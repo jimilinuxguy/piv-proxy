@@ -111,7 +111,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/logout":
             return self.respond(404, "Not found")
         SESSIONS.pop(cookie_token(self.headers), None)
-        return self.respond(303, location="/", cookie="demo_oidc=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0")
+        return self.respond(303, location=ISSUER + "/oidc/logout?" + urlencode({"client_id":CLIENT, "post_logout_redirect_uri":CALLBACK.rsplit("/", 1)[0] + "/"}), cookie="demo_oidc=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0")
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("0.0.0.0", 8001), Handler).serve_forever()
