@@ -31,7 +31,7 @@ def check_revocation(cert, now):
     try:
         issuers = load_pem_certificates(ISSUER_PATH.read_bytes())
         paths = (sorted(p for p in CRL_DIRECTORY.iterdir() if p.is_file() and
-                        p.suffix.lower() in (".crl", ".pem", ".der"))
+                        p.suffix.lower() in (".crl", ".der"))
                  if CRL_DIRECTORY.is_dir() else [CRL_PATH])
         crls = []
         for path in paths:
