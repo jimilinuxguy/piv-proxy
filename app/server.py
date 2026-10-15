@@ -114,7 +114,7 @@ def validate_piv(encoded):
     subject = cn[0].value if cn else cert.subject.rfc4514_string()
     return subject, cert.fingerprint(hashes.SHA256()).hex()
 
-DEFAULT_RETURN_URL = "https://localhost:8443/app/"
+DEFAULT_RETURN_URL = os.getenv("PIV_DEFAULT_RETURN_URL", "https://localhost:8443/app/")
 
 def callback_url(request_path):
     """Only redirect to relative paths or explicitly approved HTTPS origins."""
@@ -131,11 +131,11 @@ def callback_url(request_path):
     if parsed.fragment or parsed.username or parsed.password:
         raise ValueError("Invalid callback URL")
     if target.startswith("/") and not target.startswith("//"):
-        return "https://localhost:8443" + target
+        return oidc.issuer() + target
     if parsed.scheme != "https" or not parsed.hostname or not parsed.netloc:
         raise ValueError("Callback must be HTTPS and explicitly allowed")
     allowed = {x.strip().rstrip("/") for x in
-               os.getenv("PIV_CALLBACK_ALLOWED_ORIGINS", "https://localhost:8443").split(",")
+               os.getenv("PIV_CALLBACK_ALLOWED_ORIGINS", oidc.issuer()).split(",")
                if x.strip()}
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if origin not in allowed:
@@ -169,7 +169,7 @@ def session_identity(headers):
 
 def session_claims(identity, fingerprint):
     """Bind a session to the validated leaf certificate, not just its CN."""
-    return {"identity": identity, "subject_id": "sha256:" + fingerprint,
+    return {"identity": identity, "subject_id": oidc.persistent_subject(fingerprint),
             "certificate_sha256": fingerprint, "auth_method": "piv"}
 
 def validate_api(headers):
@@ -194,7 +194,7 @@ def validate_api(headers):
             not isinstance(claims.get("certificate_sha256"), str) or
             len(claims["certificate_sha256"]) != 64 or
             any(c not in "0123456789abcdef" for c in claims["certificate_sha256"]) or
-            claims.get("subject_id") != "sha256:" + claims["certificate_sha256"] or
+            claims.get("subject_id") != oidc.persistent_subject(claims["certificate_sha256"] or
             claims.get("auth_method") != "piv"):
         return 401, {"authenticated": False}
     ttl = STORE.ttl("session:" + token)
@@ -229,7 +229,7 @@ class Handler(BaseHTTPRequestHandler):
                 request_id = oidc.create_request(STORE, parse_qs(urlsplit(self.path).query, keep_blank_values=True))
             except (ValueError, redis.RedisError, OSError) as exc:
                 return self.respond(400, "Authorization request rejected")
-            return self.respond(303, "", headers={"Location": "https://localhost:8444/login?oidc_request=" + quote(request_id)})
+            return self.respond(303, "", headers={"Location": oidc.login_origin() + "/login?oidc_request=" + quote(request_id)})
         if route == "/oidc/complete":
             try:
                 request_id = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
@@ -237,6 +237,21 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, redis.RedisError, TypeError):
                 return self.respond(401, "Authorization expired; restart CAC/PIV login")
             return self.respond(303, "", headers={"Location": destination})
+        if route == "/oidc/logout":
+            query = parse_qs(urlsplit(self.path).query)
+            redirect = query.get("post_logout_redirect_uri", [""])[0]
+            client_id = query.get("client_id", [""])[0]
+            clients = oidc.decode_clients()
+            allowed = clients.get(client_id, {}).get("post_logout_redirect_uris", [])
+            if redirect and (redirect not in allowed or len(query.get("post_logout_redirect_uri", [])) != 1):
+                return self.respond(400, "Unregistered post-logout redirect")
+            if redirect and not client_id:
+                return self.respond(400, "Client ID required")
+            token = session_token(self.headers)
+            if token:
+                STORE.delete("session:" + token)
+            cookie = f"{COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
+            return self.respond(303, "", headers={"Set-Cookie": cookie, "Location": redirect or oidc.issuer() + "/signed-out"})
         if route == "/userinfo":
             try:
                 claims = oidc.userinfo(STORE, self.headers.get("Authorization", "")) if os.getenv("OIDC_ENABLED", "false").lower() == "true" else None
@@ -270,7 +285,7 @@ class Handler(BaseHTTPRequestHandler):
                 if oidc_requests:
                     if len(oidc_requests) != 1 or not STORE.exists("oidc-request:" + oidc_requests[0]):
                         raise ValueError("OIDC authorization request expired")
-                    destination = "https://localhost:8443/oidc/complete?id=" + quote(oidc_requests[0])
+                    destination = oidc.issuer() + "/oidc/complete?id=" + quote(oidc_requests[0])
                 else:
                     destination = callback_url(self.path)
                 identity, fingerprint = validate_piv(encoded)
@@ -305,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
         except redis.RedisError:
             return self.respond(503, "Session store unavailable")
         cookie = f"{COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
-        return self.respond(303, "", headers={"Set-Cookie": cookie, "Location": "https://localhost:8443/signed-out"})
+        return self.respond(303, "", headers={"Set-Cookie": cookie, "Location": oidc.issuer() + "/signed-out"})
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
