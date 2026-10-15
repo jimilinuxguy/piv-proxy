@@ -5,7 +5,7 @@ import os
 import secrets
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit, parse_qs
 import redis
 from pathlib import Path
 from cryptography import x509
@@ -109,6 +109,34 @@ def validate_piv(encoded):
     subject = cn[0].value if cn else cert.subject.rfc4514_string()
     return subject, cert.fingerprint(hashes.SHA256()).hex()
 
+DEFAULT_RETURN_URL = "https://localhost:8443/app/"
+
+def callback_url(request_path):
+    """Only redirect to relative paths or explicitly approved HTTPS origins."""
+    query = parse_qs(urlsplit(request_path).query, keep_blank_values=True)
+    values = query.get("return_to", [])
+    if not values:
+        return DEFAULT_RETURN_URL
+    if len(values) != 1:
+        raise ValueError("Invalid callback URL")
+    target = values[0]
+    if not target or any(ord(c) < 32 or ord(c) == 127 for c in target) or "\\\\" in target:
+        raise ValueError("Invalid callback URL")
+    parsed = urlsplit(target)
+    if parsed.fragment or parsed.username or parsed.password:
+        raise ValueError("Invalid callback URL")
+    if target.startswith("/") and not target.startswith("//"):
+        return "https://localhost:8443" + target
+    if parsed.scheme != "https" or not parsed.hostname or not parsed.netloc:
+        raise ValueError("Callback must be HTTPS and explicitly allowed")
+    allowed = {x.strip().rstrip("/") for x in
+               os.getenv("PIV_CALLBACK_ALLOWED_ORIGINS", "https://localhost:8443").split(",")
+               if x.strip()}
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin not in allowed:
+        raise ValueError("Callback origin not allowed")
+    return target
+
 def session_token(headers):
     jar = cookies.SimpleCookie()
     try:
@@ -147,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
             if not identity:
                 return self.respond(401, "PIV login required")
             return self.respond(200, "ok", headers={"X-Authenticated-User": identity})
-        if self.path == "/login":
+        if urlsplit(self.path).path == "/login":
             if self.headers.get("X-PIV-Verified") != "SUCCESS":
                 return self.respond(403, "PIV rejected: NGINX did not verify certificate")
             encoded = self.headers.get("X-PIV-Cert", "")
@@ -161,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, x509.ExtensionNotFound, redis.RedisError) as exc:
                 return self.respond(403, "PIV rejected: " + str(exc))
             cookie = f"{COOKIE_NAME}={token}; Path=/; Max-Age={SESSION_TTL}; Secure; HttpOnly; SameSite=Lax"
-            return self.respond(303, "", headers={"Set-Cookie": cookie, "Location": "https://localhost:8443/app/"})
+            return self.respond(303, "", headers={"Set-Cookie": cookie, "Location": destination})
         return self.respond(404, "Not found")
 
     def do_POST(self):
