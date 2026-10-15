@@ -127,7 +127,7 @@ Cookie: piv_proxy_session=<browser-cookie>
 Successful response (`200`):
 
 ```json
-{"authenticated":true,"identity":"Example User","auth_method":"piv","expires_in":742}
+{"authenticated":true,"identity":"Example User","subject_id":"sha256:<64-hex-digits>","certificate_sha256":"<64-hex-digits>","auth_method":"piv","expires_in":742}
 ```
 
 Other responses: `401` means missing/invalid/expired session; `403` means invalid or missing API key (or the API is disabled); `503` means Redis is unavailable. All responses use `Cache-Control: no-store`.
@@ -154,7 +154,7 @@ def validated_piv_identity():
     return response.json()["identity"]
 ```
 
-The receiving application must map the returned identity to an **authorized** local account and establish its normal session; this does not automatically bypass a third-party login form. The current identity is the certificate common name, **not a guaranteed unique account identifier**. For account mapping, extend the identity claim to a stable, organization-approved identifier before production use.
+The receiving application must map the returned **`subject_id`** to an authorized local account, then establish its normal session; this does not automatically bypass a third-party login form. `subject_id` is the `sha256:`-prefixed SHA-256 fingerprint of the **verified leaf certificate**; `certificate_sha256` contains the same digest without a prefix. `identity` remains the certificate common name for display only, **not account mapping**. A certificate fingerprint uniquely identifies a certificate, but **changes on card/certificate renewal**; provision an explicit, reviewed account re-linking workflow or add an organization-approved persistent identifier before production. Sessions created by older versions lack certificate-bound claims and return `401 reauthentication_required` from the validation API; sign in again to issue a new session.
 
 **Security boundaries:** The bearer key authenticates the calling service, not the end user. Keep it secret and rotate it if exposed. Restrict Docker network membership; any application holding both a valid cookie and key can introspect that session. Use TLS/mTLS if validation traverses hosts or untrusted networks. Do not publish this endpoint to the internet. Validate the session on each protected request or carefully constrain any local session lifetime; logout/revocation will not invalidate independent downstream sessions automatically.
 
